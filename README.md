@@ -1,27 +1,56 @@
 # Tissue-Specific Promoters
 
-Design and optimization of tissue and cell-type specific promoters.
+Design promoters that are **active in immune cells** (T-cells, macrophages) and **inactive in non-immune cells** (HEK293).
 
-## Project Structure
+## Approach
+
+Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforcement learning for cell-type-specific promoter design.
+
+### Phase 1 (Current)
+
+| Cell Line | Type | Objective | Status |
+|-----------|------|-----------|--------|
+| JURKAT | T-cell | ON (maximize) | ✅ Oracle available |
+| THP1 | Macrophage | ON (maximize) | ✅ Oracle available |
+| K562 | Myeloid | OFF (constrain) | ✅ Oracle available |
+
+**Note**: K562 is a proxy for HEK293. Both are off-targets, but K562 is hematopoietic while HEK293 is epithelial. Results should be validated in HEK293.
+
+### Future Phases
+
+- Add HEK293 oracle (from [PARM](https://github.com/vansteensellab/PARM) data)
+- Add B-cell oracle (from [SynBP](https://zenodo.org/records/8008545) data)
+- Swap HyenaDNA generator for [Evo 2](https://github.com/ArcInstitute/evo2)
+
+## How It Works
 
 ```
-├── data/           # Raw and processed datasets
-├── models/         # Trained models and checkpoints
-├── notebooks/      # Jupyter notebooks for exploration
-├── src/            # Source code
-│   ├── data/       # Data loading and processing
-│   ├── models/     # Model architectures
-│   └── utils/      # Utility functions
-└── scripts/        # Training and evaluation scripts
+HyenaDNA (generator) → Candidate sequences → Enformer oracles (per cell type)
+        ↑                                              ↓
+        └──────── Lagrangian RL optimization ──────────┘
+                  (maximize ON, constrain OFF)
 ```
+
+## Dependencies
+
+- [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) (Apache-2.0) - included as submodule
 
 ## Setup
 
 ```bash
-# Create virtual environment
+# Clone with submodules
+git clone --recursive https://github.com/alecnielsen/tissue-specific-promoters.git
+cd tissue-specific-promoters
+
+# Create environment
 python -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
-pip install -e .
+# Install Ctrl-DNA dependencies
+cd Ctrl-DNA && pip install -r requirements.txt
 ```
+
+## References
+
+- [Ctrl-DNA](https://arxiv.org/abs/2505.20578) - Chen et al., 2025
+- [regLM](https://genome.cshlp.org/content/early/2024/09/24/gr.279173.124) - Lal et al., 2024
