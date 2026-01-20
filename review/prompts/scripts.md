@@ -106,12 +106,14 @@ If you find **code issues**:
    - File path and line number
    - Description of what was wrong
    - What you changed and why
+3. Do NOT say "NO_ISSUES" - another iteration will verify your fixes
 
-If no **code issues** are found (or after fixing all issues), respond with exactly:
+If you reviewed the code and found **no issues to fix**, respond with exactly:
 NO_ISSUES
 
 **Important notes:**
 - Do not just report issues - actually edit the files to fix them
 - Do not invent issues if the code is correct. Only fix genuine problems.
 - Documentation updates (README, NOTES.md) do NOT count as code issues
-- "NO_ISSUES" means the code is now correct, even if you made fixes this iteration
+- Only say "NO_ISSUES" if you made zero edits this iteration
+- If you fixed anything, report it and let the next iteration verify

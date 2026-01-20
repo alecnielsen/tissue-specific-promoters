@@ -20,8 +20,11 @@ import os
 import sys
 from pathlib import Path
 
+# Resolve paths before changing directory
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
 # Add Ctrl-DNA to path
-CTRL_DNA_PATH = Path(__file__).parent.parent / "Ctrl-DNA" / "ctrl_dna"
+CTRL_DNA_PATH = PROJECT_ROOT / "Ctrl-DNA" / "ctrl_dna"
 sys.path.insert(0, str(CTRL_DNA_PATH))
 os.chdir(CTRL_DNA_PATH)
 
@@ -34,10 +37,19 @@ from dna_optimizers_multi.base_optimizer import get_fitness_info
 from dna_optimizers_multi.lagrange_optimizer import Lagrange_optimizer
 
 
+def resolve_path(path_str):
+    """Resolve a path string relative to the project root."""
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return str(path.resolve())
+
+
 def get_meme_and_ppms_path(tfbs_dir):
-    """Get paths to TFBS motif files."""
-    meme_path = f"{tfbs_dir}/20250424153556_JASPAR2024_combined_matrices_735317_meme.txt"
-    ppms_path = f"{tfbs_dir}/selected_ppms.csv"
+    """Get paths to TFBS motif files (tfbs_dir should already be resolved)."""
+    tfbs_path = Path(tfbs_dir)
+    meme_path = str(tfbs_path / "20250424153556_JASPAR2024_combined_matrices_735317_meme.txt")
+    ppms_path = str(tfbs_path / "selected_ppms.csv")
     return meme_path, ppms_path
 
 
@@ -168,6 +180,11 @@ class DualOnOptimizer(Lagrange_optimizer):
 
 def main():
     args = parse_args()
+
+    # Resolve all paths relative to project root before they're used
+    args.tfbs_dir = resolve_path(args.tfbs_dir)
+    args.data_dir = resolve_path(args.data_dir)
+    args.checkpoint_dir = resolve_path(args.checkpoint_dir)
 
     # Set seed
     set_seed(args.seed)
