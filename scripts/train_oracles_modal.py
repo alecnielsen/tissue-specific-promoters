@@ -162,7 +162,9 @@ def train_oracle(
 
     # Copy best checkpoint to final location
     best_ckpt = checkpoint_callback.best_model_path
-    final_path = f"/checkpoints/human_paired_{cell.lower()}.ckpt"
+    # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
+    cell_name = cell if cell == "THP1" else cell.lower()
+    final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
 
     import shutil
     if best_ckpt:
@@ -203,22 +205,28 @@ def main(
     print("Loading data...")
     df = pd.read_csv(processed_path)
 
-    # Split into train/val (same logic as local script)
+    # Split into train/val - must match local script exactly (stratify by GC content only)
+    # Note: prepare_data.py doesn't save class labels, so we stratify by GC content only
+    # This is consistent with the data available from processed_expression.csv
     import numpy as np
     np.random.seed(97)
 
     def gc_content(seq):
         return sum(1 for c in seq if c in "GC") / len(seq)
 
-    df["GC_bin"] = (df["sequence"].apply(gc_content) / 0.05).astype(int)
+    df["GC_bin"] = (np.floor(df["sequence"].apply(gc_content) / 0.05)).astype(int)
 
     train_idx, val_idx = [], []
     for gc_bin in df["GC_bin"].unique():
         bin_idx = df[df["GC_bin"] == gc_bin].index.tolist()
         np.random.shuffle(bin_idx)
-        n_train = int(len(bin_idx) * 0.8)
+        # Use 70/10/20 split (train/val/test) to match local script
+        # Test set is not used for training, so we only track train/val
+        n_train = int(np.ceil(len(bin_idx) * 0.7))
+        n_val = int(np.floor(len(bin_idx) * 0.1))
         train_idx.extend(bin_idx[:n_train])
-        val_idx.extend(bin_idx[n_train:])
+        val_idx.extend(bin_idx[n_train:n_train + n_val])
+        # Remaining goes to test (not used)
 
     train_df = df.loc[train_idx]
     val_df = df.loc[val_idx]

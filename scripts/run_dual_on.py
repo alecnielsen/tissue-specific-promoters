@@ -149,15 +149,16 @@ class DualOnOptimizer(Lagrange_optimizer):
             scores.append(norm_score)
 
         # Dual ON reward:
-        # reward = on_weight * JURKAT + on_weight * THP1 - lambda * (K562 - constraint)
+        # reward = on_weight * JURKAT + on_weight * THP1 - (K562 - off_constraint)
+        # The Lagrangian optimizer will handle dynamic lambda adjustment
         reward = (
             self.on_weight * scores[0]  # JURKAT ON
             + self.on_weight * scores[2]  # THP1 ON
-            - 0.2 * scores[1]  # K562 OFF
+            - (scores[1] - self.off_constraint)  # K562 OFF with constraint
         )
 
         if dna in self.dna_buffer:
-            self.dna_buffer[dna][2] += 1
+            self.dna_buffer[dna][3] += 1  # Increment count (index 3), not order (index 2)
             self.redundant_count += 1
         else:
             self.dna_buffer[dna] = [torch.tensor(scores), reward, len(self.dna_buffer) + 1, 1]

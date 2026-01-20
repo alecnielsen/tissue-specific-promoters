@@ -107,23 +107,21 @@ def process_mpra_data(
     merged["GC_content"] = merged["sequence"].apply(gc_content)
     merged["GC_content_bin"] = (np.floor(merged["GC_content"] / 0.05)).astype(int)
 
-    # Stratified split by class and GC content
+    # Stratified split by GC content (consistent with Modal script and prepare_data.py)
     np.random.seed(97)
     all_train_inds, all_val_inds, all_test_inds = [], [], []
 
-    for cl in merged["class"].unique():
-        class_subset = merged[merged["class"] == cl]
-        for gc_bin in range(20):
-            bin_subset = class_subset[class_subset["GC_content_bin"] == gc_bin]
-            inds = bin_subset.index.to_numpy()
-            np.random.shuffle(inds)
+    for gc_bin in merged["GC_content_bin"].unique():
+        bin_subset = merged[merged["GC_content_bin"] == gc_bin]
+        inds = bin_subset.index.to_numpy()
+        np.random.shuffle(inds)
 
-            n_train = int(np.ceil(len(inds) * train_fraction))
-            n_val = int(np.floor(len(inds) * val_fraction))
+        n_train = int(np.ceil(len(inds) * train_fraction))
+        n_val = int(np.floor(len(inds) * val_fraction))
 
-            all_train_inds.extend(inds[:n_train])
-            all_val_inds.extend(inds[n_train:n_train + n_val])
-            all_test_inds.extend(inds[n_train + n_val:])
+        all_train_inds.extend(inds[:n_train])
+        all_val_inds.extend(inds[n_train:n_train + n_val])
+        all_test_inds.extend(inds[n_train + n_val:])
 
     # Create splits
     train_df = merged.loc[all_train_inds, ["sequence"] + cell_names].reset_index(drop=True)
@@ -195,7 +193,9 @@ def train_oracle(
     if best_ckpt:
         # Sort by modification time, get most recent (best)
         best_ckpt = sorted(best_ckpt, key=lambda p: p.stat().st_mtime)[-1]
-        target_path = checkpoint_dir / f"human_paired_{cell.lower()}.ckpt"
+        # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
+        cell_name = cell if cell == "THP1" else cell.lower()
+        target_path = checkpoint_dir / f"human_paired_{cell_name}.ckpt"
         import shutil
         shutil.copy(best_ckpt, target_path)
         print(f"  Saved checkpoint: {target_path}")
@@ -251,27 +251,45 @@ def main():
     cache_dir = data_dir / "mpra_cache"
     counts_path, seqs_path = download_data(cache_dir)
 
-    processed_path = cache_dir / "processed.csv"
+    processed_path = cache_dir / "processed_expression.csv"
     if processed_path.exists():
         print(f"Loading cached processed data from {processed_path}")
         merged = pd.read_csv(processed_path)
-        # Recreate splits based on saved indices
-        train_df = merged[merged["split"] == "train"][["sequence", "JURKAT", "K562", "THP1"]]
-        val_df = merged[merged["split"] == "val"][["sequence", "JURKAT", "K562", "THP1"]]
-        test_df = merged[merged["split"] == "test"][["sequence", "JURKAT", "K562", "THP1"]]
+        # Check if split column exists (from train_oracles.py) or not (from prepare_data.py)
+        if "split" in merged.columns:
+            train_df = merged[merged["split"] == "train"][["sequence", "JURKAT", "K562", "THP1"]]
+            val_df = merged[merged["split"] == "val"][["sequence", "JURKAT", "K562", "THP1"]]
+            test_df = merged[merged["split"] == "test"][["sequence", "JURKAT", "K562", "THP1"]]
+        else:
+            # File from prepare_data.py - need to create splits
+            # Use GC-based stratification (consistent with Modal script)
+            print("Creating train/val/test splits...")
+            np.random.seed(97)
+
+            def gc_content(seq):
+                return sum(1 for c in seq if c in "GC") / len(seq)
+
+            merged["GC_bin"] = (np.floor(merged["sequence"].apply(gc_content) / 0.05)).astype(int)
+
+            train_idx, val_idx, test_idx = [], [], []
+            for gc_bin in merged["GC_bin"].unique():
+                bin_idx = merged[merged["GC_bin"] == gc_bin].index.tolist()
+                np.random.shuffle(bin_idx)
+                n_train = int(np.ceil(len(bin_idx) * 0.7))
+                n_val = int(np.floor(len(bin_idx) * 0.1))
+                train_idx.extend(bin_idx[:n_train])
+                val_idx.extend(bin_idx[n_train:n_train + n_val])
+                test_idx.extend(bin_idx[n_train + n_val:])
+
+            train_df = merged.loc[train_idx, ["sequence", "JURKAT", "K562", "THP1"]].reset_index(drop=True)
+            val_df = merged.loc[val_idx, ["sequence", "JURKAT", "K562", "THP1"]].reset_index(drop=True)
+            test_df = merged.loc[test_idx, ["sequence", "JURKAT", "K562", "THP1"]].reset_index(drop=True)
     else:
         train_df, val_df, test_df = process_mpra_data(counts_path, seqs_path)
-        # Save processed data with split labels
-        train_df["split"] = "train"
-        val_df["split"] = "val"
-        test_df["split"] = "test"
+        # Save processed data (without split labels for compatibility with prepare_data.py)
         merged = pd.concat([train_df, val_df, test_df])
         merged.to_csv(processed_path, index=False)
         print(f"Saved processed data to {processed_path}")
-        # Remove split column for training
-        train_df = train_df.drop("split", axis=1)
-        val_df = val_df.drop("split", axis=1)
-        test_df = test_df.drop("split", axis=1)
 
     # Print fitness statistics
     print("\nFitness statistics (for normalization):")
