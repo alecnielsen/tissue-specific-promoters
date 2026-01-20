@@ -21,12 +21,25 @@ python reinforce_multi_lagrange.py \
     --grpo True \
     --epoch 5 \
     --lambda_lr 3e-4 \
-    --lambda_value 0.1 0.9
+    --lambda_value 0.1 0.9 \
+    --tfbs_dir ./data/TFBS \
+    --data_dir ./data \
+    --checkpoint_dir ./checkpoints
 ```
+
+### Path Configuration
+
+Three new CLI args configure data/model locations:
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `--tfbs_dir` | `./data/TFBS` | JASPAR motif files (meme, ppms) |
+| `--data_dir` | `./data` | MPRA training data |
+| `--checkpoint_dir` | `./checkpoints` | Oracle model checkpoints |
 
 ## Gotchas
 
-- Ctrl-DNA has **hardcoded paths** in the code (e.g., `/h/chenx729/...`, `/scratch/...`)
+- ~~Ctrl-DNA has **hardcoded paths** in the code~~ **FIXED** - now configurable via CLI args
 - Need to download pre-trained oracle checkpoints (not included in repo)
 - Need MPRA data files for initialization
 
