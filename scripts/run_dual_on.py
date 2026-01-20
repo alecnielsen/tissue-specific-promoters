@@ -154,19 +154,23 @@ class DualOnOptimizer(Lagrange_optimizer):
         if len(self.dna_buffer) > self.max_oracle_calls:
             return 0
 
-        scores = []
+        # Score each cell type explicitly by key (not relying on dict order)
+        scores_dict = {}
         for cell, model in self.targets.items():
             raw_score = model([dna]).squeeze(0).item()
-            norm_score = self.normalize_target(raw_score, cell)
-            scores.append(norm_score)
+            scores_dict[cell] = self.normalize_target(raw_score, cell)
+
+        # Build scores list in consistent order: JURKAT, K562, THP1
+        # This ensures buffer format matches base_optimizer expectations
+        scores = [scores_dict['JURKAT'], scores_dict['K562'], scores_dict['THP1']]
 
         # Dual ON reward:
         # reward = on_weight * JURKAT + on_weight * THP1 - (K562 - off_constraint)
         # The Lagrangian optimizer will handle dynamic lambda adjustment
         reward = (
-            self.on_weight * scores[0]  # JURKAT ON
-            + self.on_weight * scores[2]  # THP1 ON
-            - (scores[1] - self.off_constraint)  # K562 OFF with constraint
+            self.on_weight * scores_dict['JURKAT']  # JURKAT ON
+            + self.on_weight * scores_dict['THP1']  # THP1 ON
+            - (scores_dict['K562'] - self.off_constraint)  # K562 OFF with constraint
         )
 
         if dna in self.dna_buffer:
