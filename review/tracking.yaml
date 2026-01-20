@@ -1,0 +1,13 @@
+# Ralph Wiggum Review Tracking
+# Auto-generated - do not edit manually
+
+module:
+  name: scripts
+  status: pending
+  iterations: 0
+  last_result: null
+  last_reviewed: null
+
+summary:
+  total_iterations: 0
+  last_run: null

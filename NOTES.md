@@ -19,73 +19,85 @@ Design tissue-specific promoters that are:
 ### Completed
 - [x] Fork Ctrl-DNA to [alecnielsen/Ctrl-DNA](https://github.com/alecnielsen/Ctrl-DNA)
 - [x] Fix hardcoded paths - now configurable via CLI args
+- [x] Create oracle training script (`scripts/train_oracles.py`)
+- [x] Create dual ON target runner (`scripts/run_dual_on.py`)
+- [x] Create data preparation script (`scripts/prepare_data.py`)
 
 ### Remaining Setup
-- [ ] Download/prepare MPRA training data
-- [ ] Train oracle models (~6-12 hrs total GPU time)
-- [ ] Adapt code for dual ON targets (currently 1 ON + 2 OFF)
+- [ ] Run `scripts/prepare_data.py` to download MPRA data and JASPAR motifs
+- [ ] Train oracle models on GPU (~2-4 hrs each)
+- [ ] Run Ctrl-DNA optimization
 
 ---
 
-## Data & Model Requirements
+## Quick Start
 
-### Oracle Models (Reward Functions)
+### 1. Prepare Data
 
-The RL training requires pre-trained regression models that predict expression from sequence. These are NOT publicly available for promoters - must train from scratch.
+```bash
+cd /Users/alec/kernel/tissue-specific-promoters
 
-**Required checkpoints** (place in `./checkpoints/`):
-```
-human_paired_jurkat.ckpt   # JURKAT oracle
-human_paired_k562.ckpt     # K562 oracle
-human_paired_THP1.ckpt     # THP1 oracle
-```
+# Download and process all data
+python scripts/prepare_data.py --download_all
 
-**Training estimate**: ~2-4 hours per model on single GPU (10 epochs, ~17K sequences)
-
-### MPRA Training Data
-
-**Source**: Reddy et al. 2024 - "Strategies for effectively modelling promoter-driven gene expression using transfer learning"
-
-| Resource | URL | Contents |
-|----------|-----|----------|
-| Code + Data | https://github.com/anikethjr/promoter_models | Training scripts, data loaders |
-| Paper | https://pmc.ncbi.nlm.nih.gov/articles/PMC10002662/ | Methods, data description |
-| Pretraining data | https://huggingface.co/datasets/anikethjr/promoter_design | SuRE data |
-| Sharpr-MPRA | https://mitra.stanford.edu/kundaje/projects/mpra/data/ | train.hdf5, valid.hdf5, test.hdf5 |
-
-**Data details**: ~17,104 promoter expression measurements across JURKAT, K562, THP1 cells
-
-### TFBS Motif Files
-
-**Required files** (place in `./data/TFBS/`):
-```
-20250424153556_JASPAR2024_combined_matrices_735317_meme.txt
-selected_ppms.csv
+# Or skip TFBS scanning if pymemesuite not installed
+python scripts/prepare_data.py --download_all --skip_tfbs_scan
 ```
 
-**Source**: JASPAR 2024 database - need to download or extract from TACO repo
+### 2. Train Oracle Models
 
-### RL Initialization Data
+#### Option A: Modal (recommended, ~$2-5 total)
 
-**Required files** (place in `./data/human_promoters/`):
+```bash
+# Train all oracles on Modal GPU
+modal run scripts/train_oracles_modal.py
+
+# Train single cell type
+modal run scripts/train_oracles_modal.py --cell JURKAT
+
+# Quick test (1 epoch, ~$0.50)
+modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 1
+
+# Download checkpoints from Modal
+modal volume get ctrl-dna-checkpoints human_paired_jurkat.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_k562.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_THP1.ckpt ./checkpoints/
 ```
-rl_data_large/JURKAT_hard.csv
-rl_data_large/K562_hard.csv
-rl_data_large/THP1_hard.csv
-tfbs/JURKAT_tfbs_freq_all.csv
-tfbs/K562_tfbs_freq_all.csv
-tfbs/THP1_tfbs_freq_all.csv
+
+#### Option B: Local GPU
+
+```bash
+# Train all three cell type oracles
+python scripts/train_oracles.py --cell all --epochs 10 --device 0
+
+# Or train individually
+python scripts/train_oracles.py --cell JURKAT --epochs 10 --device 0
+
+# CPU fallback (very slow, ~20-40 hrs per model)
+python scripts/train_oracles.py --cell JURKAT --epochs 10 --cpu
 ```
 
-These are derived from the MPRA data - likely need to generate during oracle training.
+### 3. Run Ctrl-DNA Optimization
 
----
-
-## To Run Ctrl-DNA
+For dual ON targets (JURKAT + THP1 ON, K562 OFF):
 
 ```bash
 cd Ctrl-DNA/ctrl_dna
 
+python ../../scripts/run_dual_on.py \
+    --epoch 5 \
+    --max_iter 100 \
+    --on_weight 0.4 \
+    --off_constraint 0.3 \
+    --tfbs_dir ../../data/TFBS \
+    --data_dir ../../data \
+    --checkpoint_dir ../../checkpoints \
+    --wandb_log
+```
+
+Or use original single-ON target:
+
+```bash
 python reinforce_multi_lagrange.py \
     --task JURKAT \
     --oracle_type paired \
@@ -93,93 +105,177 @@ python reinforce_multi_lagrange.py \
     --epoch 5 \
     --lambda_lr 3e-4 \
     --lambda_value 0.1 0.9 \
-    --tfbs_dir ./data/TFBS \
-    --data_dir ./data \
-    --checkpoint_dir ./checkpoints
+    --tfbs_dir ../../data/TFBS \
+    --data_dir ../../data \
+    --checkpoint_dir ../../checkpoints
 ```
 
-### CLI Path Configuration
+---
 
-| Arg | Default | Description |
-|-----|---------|-------------|
-| `--tfbs_dir` | `./data/TFBS` | JASPAR motif files (meme, ppms) |
-| `--data_dir` | `./data` | MPRA training data |
-| `--checkpoint_dir` | `./checkpoints` | Oracle model checkpoints |
+## Data & Model Requirements
+
+### Data Directory Structure
+
+After running `prepare_data.py`:
+
+```
+data/
+├── mpra_cache/
+│   ├── Raw_Promoter_Counts.csv      # ~17K promoter MPRA measurements
+│   ├── final_list_of_all_promoter_sequences_fixed.tsv
+│   └── processed_expression.csv      # Processed log2 ratios
+├── TFBS/
+│   ├── *_JASPAR2024_*_meme.txt      # JASPAR motifs (MEME format)
+│   └── selected_ppms.csv             # Selected immune-relevant TFs
+└── human_promoters/
+    ├── rl_data_large/
+    │   ├── JURKAT_hard.csv           # RL init: top JURKAT promoters
+    │   ├── K562_hard.csv             # RL init: top K562 promoters
+    │   └── THP1_hard.csv             # RL init: top THP1 promoters
+    └── tfbs/
+        ├── JURKAT_tfbs_freq_all.csv  # TFBS frequencies
+        ├── K562_tfbs_freq_all.csv
+        └── THP1_tfbs_freq_all.csv
+
+checkpoints/
+├── human_paired_jurkat.ckpt          # JURKAT oracle
+├── human_paired_k562.ckpt            # K562 oracle
+└── human_paired_THP1.ckpt            # THP1 oracle
+```
+
+### Oracle Models
+
+EnformerModel regressors trained on MPRA data:
+- Architecture: Enformer trunk (dim=384, depth=4) + linear head
+- Loss: MSE on log2(P4/P7) expression values
+- Training: ~12K sequences, 10 epochs
+
+### Fitness Statistics
+
+From processed MPRA data (for normalization in base_optimizer.py):
+
+| Cell Type | Min Fitness | Max Fitness |
+|-----------|-------------|-------------|
+| JURKAT    | -5.574782   | 8.413577    |
+| K562      | -4.088671   | 8.555965    |
+| THP1      | -7.271035   | 12.485513   |
+
+---
+
+## Code Changes Summary
+
+### Scripts Created
+
+1. **scripts/train_oracles.py** - Train EnformerModel oracles (local)
+   - Downloads MPRA data from Google Drive
+   - Processes into train/val splits
+   - Trains per-cell-type regression models
+
+2. **scripts/train_oracles_modal.py** - Train oracles on Modal GPU
+   - Same training logic, runs on cloud GPU
+   - ~$2-5 total for all 3 models
+
+3. **scripts/run_dual_on.py** - Run Ctrl-DNA with dual ON targets
+   - Modified reward: `on_weight * JURKAT + on_weight * THP1 - (K562 - constraint)`
+   - Custom `DualOnOptimizer` class
+
+4. **scripts/prepare_data.py** - Prepare all data files
+   - Downloads MPRA data
+   - Downloads JASPAR 2024 motifs
+   - Generates RL init and TFBS frequency files
+
+### Ctrl-DNA Fork Changes
+
+1. **reinforce_multi_lagrange.py**
+   - Added `--tfbs_dir`, `--data_dir`, `--checkpoint_dir` CLI args
+
+2. **dna_optimizers_multi/base_optimizer.py**
+   - Updated `load_target_model()` for configurable paths
+
+3. **dna_optimizers_multi/lagrange_optimizer.py**
+   - Updated to use configurable data_dir
+
+---
+
+## Dual ON Target Reward Structure
+
+Current Ctrl-DNA: 1 ON + 2 OFF constraints
+- Reward = ON - (OFF1 - c1) + ON - (OFF2 - c2)
+
+Modified for JURKAT+THP1 ON, K562 OFF:
+- Reward = w * JURKAT + w * THP1 - (K562 - c)
+- Default: w=0.4 (each ON target), c=0.3 (OFF constraint)
+
+The Lagrangian optimizer adjusts the K562 constraint dynamically.
+
+---
+
+## Dependencies
+
+```bash
+# Core
+pip install torch pytorch-lightning enformer-pytorch pandas numpy
+
+# For TFBS scanning
+pip install pymemesuite
+
+# For logging
+pip install wandb
+```
+
+---
+
+## Reference Resources
+
+| Resource | URL | Use Case |
+|----------|-----|----------|
+| Ctrl-DNA (fork) | https://github.com/alecnielsen/Ctrl-DNA | Main codebase |
+| promoter_models | https://github.com/anikethjr/promoter_models | MPRA data source |
+| JASPAR 2024 | https://jaspar.elixir.no | TF motif database |
+| regLM | https://github.com/Genentech/regLM | Oracle architecture |
+
+---
+
+## Code Review (Ralph Wiggum Loop)
+
+Automated iterative code review using the [Ralph Wiggum technique](https://awesomeclaude.ai/ralph-wiggum).
+
+```bash
+# Run the review loop (iterates until clean or max iterations)
+./review/ralph_review.sh
+
+# Run in macOS sandbox (recommended - blocks ~/.ssh, ~/.aws, etc.)
+./review/sandbox_review.sh
+
+# Check current status
+./review/ralph_review.sh --status
+
+# Reset and start fresh
+./review/ralph_review.sh --reset
+
+# Increase max iterations (default: 5)
+MAX_ITERATIONS=10 ./review/ralph_review.sh
+```
+
+The loop will:
+1. Read all scripts and the review prompt
+2. Ask Claude to review and fix issues
+3. If issues found/fixed, loop again with fresh context
+4. Stop when `NO_ISSUES` or max iterations reached
+5. Detect stuck loops (same output twice = human intervention needed)
+
+Review artifacts:
+- `review/tracking.yaml` - Status tracking
+- `review/logs/scripts_history.md` - Iteration history
+- `review/prompts/scripts.md` - Review criteria
 
 ---
 
 ## Next Steps (Priority Order)
 
-### 1. Train Oracle Models
-The oracle models are EnformerModel regression models from regLM. Training code is in `Ctrl-DNA/ctrl_dna/src/reglm/regression.py`.
-
-```python
-from src.reglm.regression import EnformerModel, SeqDataset
-
-model = EnformerModel(lr=1e-4, loss="mse", pretrained=False)
-model.train_on_dataset(train_dataset, val_dataset, max_epochs=10)
-```
-
-**TODO**: Write a training script that:
-1. Loads Reddy et al. MPRA data
-2. Splits into train/val per cell type
-3. Trains 3 separate regression models
-4. Saves checkpoints in expected format
-
-### 2. Adapt for Dual ON Targets
-Current code optimizes: 1 ON target + 2 OFF constraints
-Need to modify for: 2 ON targets (JURKAT + THP1) + 1 OFF (K562)
-
-Key file: `Ctrl-DNA/ctrl_dna/reinforce_multi_lagrange.py`
-- Modify reward calculation in `main()`
-- Update constraint handling in `lagrange_optimizer.py`
-
-### 3. Prepare Data Directory Structure
-```
-data/
-├── TFBS/
-│   ├── 20250424153556_JASPAR2024_combined_matrices_735317_meme.txt
-│   └── selected_ppms.csv
-├── human_promoters/
-│   ├── rl_data_large/
-│   │   ├── JURKAT_hard.csv
-│   │   ├── K562_hard.csv
-│   │   └── THP1_hard.csv
-│   └── tfbs/
-│       ├── JURKAT_tfbs_freq_all.csv
-│       ├── K562_tfbs_freq_all.csv
-│       └── THP1_tfbs_freq_all.csv
-checkpoints/
-├── human_paired_jurkat.ckpt
-├── human_paired_k562.ckpt
-└── human_paired_THP1.ckpt
-```
-
----
-
-## Reference: Related Resources
-
-| Resource | URL | Use Case |
-|----------|-----|----------|
-| regLM (Genentech) | https://github.com/Genentech/regLM | Oracle architecture, training code |
-| regLM Zenodo | https://zenodo.org/records/10669334 | Enhancer models (hepg2/k562/sknsh) - NOT promoters |
-| promoter_design | https://github.com/young-geng/promoter_design | Alternative approach, has finetuning data |
-| PARM | https://github.com/vansteensellab/PARM | HEK293 oracle (future) |
-| Evo 2 | https://github.com/ArcInstitute/evo2 | Better sequence generator (future) |
-
----
-
-## Code Changes Made
-
-### Files Modified in Ctrl-DNA Fork
-
-1. **reinforce_multi_lagrange.py**
-   - Added `--tfbs_dir`, `--data_dir`, `--checkpoint_dir` CLI args
-   - Updated `get_meme_and_ppms_path()` to accept tfbs_dir parameter
-   - Updated `main()` to use configurable data_dir
-
-2. **dna_optimizers_multi/base_optimizer.py**
-   - Updated `load_target_model()` to use configurable checkpoint_dir
-
-3. **dna_optimizers_multi/lagrange_optimizer.py**
-   - Updated to use configurable data_dir for TFBS frequency files
+1. **Code Review**: Run `./review/ralph_review.sh` to fix known issues
+2. **Run Data Prep**: `python scripts/prepare_data.py --download_all`
+3. **Train Oracles**: `modal run scripts/train_oracles_modal.py` (or local GPU)
+4. **Run Optimization**: `python scripts/run_dual_on.py`
+5. **Analyze Results**: Check top sequences for cell-type specificity
+6. **Experimental Validation**: Test designed promoters in cell lines
