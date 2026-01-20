@@ -81,7 +81,7 @@ run_sandboxed() {
 
     # Create temp file for sandbox profile
     local profile_file
-    profile_file=$(mktemp /tmp/sandbox_profile.XXXXXX.sb)
+    profile_file=$(mktemp /tmp/sandbox_profile_XXXXXX)
     generate_sandbox_profile > "$profile_file"
 
     # Run with sandbox
