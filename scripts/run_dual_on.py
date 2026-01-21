@@ -228,13 +228,16 @@ class DualOnOptimizer(Lagrange_optimizer):
         self.agent.train()
 
         # --- Lambda update for K562 constraint only ---
-        k562_cost = rewards[-1, 1, :].mean(-1).unsqueeze(-1)  # K562 score
+        # Shape must be [N, 1] for update_lambda to iterate over
+        k562_cost = rewards[-1, 1, :].mean().view(1, 1)  # K562 score, shape [1, 1]
+        zeros = torch.zeros(1, 1, device=k562_cost.device)
 
         if correlations is not None:
-            self.update_lambda(torch.cat([k562_cost, torch.zeros_like(k562_cost), correlations.mean(-1).unsqueeze(-1).unsqueeze(-1)], dim=0))
+            corr_cost = correlations.mean().view(1, 1)
+            self.update_lambda(torch.cat([k562_cost, zeros, corr_cost], dim=0))  # [3, 1]
         else:
             # Only update first lambda (K562), zero out others
-            self.update_lambda(torch.cat([k562_cost, torch.zeros_like(k562_cost)], dim=0))
+            self.update_lambda(torch.cat([k562_cost, zeros], dim=0))  # [2, 1]
 
         # Clamp lambdas
         for i in range(3):

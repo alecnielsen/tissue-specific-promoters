@@ -22,11 +22,16 @@ Design tissue-specific promoters that are:
 - [x] Create oracle training script (`scripts/train_oracles.py`)
 - [x] Create dual ON target runner (`scripts/run_dual_on.py`)
 - [x] Create data preparation script (`scripts/prepare_data.py`)
+- [x] Run `scripts/prepare_data.py` - MPRA data and JASPAR motifs downloaded
+- [x] Train oracle models on Modal GPU (~10 min total, ~$2)
+  - JURKAT: val_loss=1.195, `checkpoints/human_paired_jurkat.ckpt`
+  - K562: val_loss=1.142, `checkpoints/human_paired_k562.ckpt`
+  - THP1: val_loss=0.494, `checkpoints/human_paired_THP1.ckpt`
 
-### Remaining Setup
-- [ ] Run `scripts/prepare_data.py` to download MPRA data and JASPAR motifs
-- [ ] Train oracle models on GPU (~2-4 hrs each)
-- [ ] Run Ctrl-DNA optimization
+### Next Steps
+- [ ] Run Ctrl-DNA optimization (`scripts/run_dual_on.py`)
+- [ ] Analyze top sequences for cell-type specificity
+- [ ] Experimental validation in cell lines
 
 ---
 
@@ -275,9 +280,27 @@ Review artifacts:
 
 ## Next Steps (Priority Order)
 
-1. **Code Review**: Run `./review/ralph_review.sh` to fix known issues
-2. **Run Data Prep**: `python scripts/prepare_data.py --download_all`
-3. **Train Oracles**: `modal run scripts/train_oracles_modal.py` (or local GPU)
-4. **Run Optimization**: `python scripts/run_dual_on.py`
+1. ~~**Code Review**: Run `./review/ralph_review.sh` to fix known issues~~ ✅ Done
+2. ~~**Run Data Prep**: `python scripts/prepare_data.py --download_all`~~ ✅ Done
+3. ~~**Train Oracles**: `modal run scripts/train_oracles_modal.py`~~ ✅ Done (checkpoints in `./checkpoints/`)
+4. **Run Optimization**: `python scripts/run_dual_on.py` ← **START HERE**
 5. **Analyze Results**: Check top sequences for cell-type specificity
 6. **Experimental Validation**: Test designed promoters in cell lines
+
+### To Run Optimization
+
+```bash
+cd /Users/alec/kernel/tissue-specific-promoters
+
+python scripts/run_dual_on.py \
+    --epoch 5 \
+    --max_iter 100 \
+    --on_weight 0.4 \
+    --off_constraint 0.3 \
+    --tfbs_dir ./data/TFBS \
+    --data_dir ./data \
+    --checkpoint_dir ./checkpoints \
+    --wandb_log  # optional, for tracking
+```
+
+This will generate promoter sequences optimized for JURKAT+THP1 ON, K562 OFF.
