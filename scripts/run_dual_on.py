@@ -297,6 +297,7 @@ class DualOnOptimizer(Lagrange_optimizer):
 
         # --- Lambda update for K562 constraint only ---
         # Shape must be [N, 1] for update_lambda to iterate over
+        # Always pass length-3 tensor to match the 3 lagrangian_multipliers
         k562_cost = rewards[-1, 1, :].mean().view(1, 1)  # K562 score, shape [1, 1]
         zeros = torch.zeros(1, 1, device=k562_cost.device)
 
@@ -304,8 +305,8 @@ class DualOnOptimizer(Lagrange_optimizer):
             corr_cost = correlations.mean().view(1, 1)
             self.update_lambda(torch.cat([k562_cost, zeros, corr_cost], dim=0))  # [3, 1]
         else:
-            # Only update first lambda (K562), zero out others
-            self.update_lambda(torch.cat([k562_cost, zeros], dim=0))  # [2, 1]
+            # Pass length-3 tensor with zeros for unused multipliers
+            self.update_lambda(torch.cat([k562_cost, zeros, zeros], dim=0))  # [3, 1]
 
         # Clamp lambdas
         for i in range(3):

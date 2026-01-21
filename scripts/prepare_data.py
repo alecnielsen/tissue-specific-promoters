@@ -388,43 +388,57 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare data for Ctrl-DNA")
     parser.add_argument("--data_dir", type=str, default="./data")
     parser.add_argument("--download_all", action="store_true",
-                        help="Download and process all data")
+                        help="Download and process all data (default if no flags)")
     parser.add_argument("--tfbs_only", action="store_true",
-                        help="Only regenerate TFBS files")
+                        help="Only regenerate TFBS files (requires existing MPRA data)")
     parser.add_argument("--skip_tfbs_scan", action="store_true",
                         help="Skip TFBS scanning (create placeholders)")
     args = parser.parse_args()
+
+    # Default to --download_all if no flags specified
+    if not args.download_all and not args.tfbs_only:
+        args.download_all = True
 
     project_root = Path(__file__).parent.parent
     data_dir = project_root / args.data_dir
 
     print("=== Ctrl-DNA Data Preparation ===\n")
 
-    # Step 1: Download MPRA data
-    print("Step 1: MPRA Data")
     cache_dir = data_dir / "mpra_cache"
-    counts_path, seqs_path = download_mpra_data(cache_dir)
-
-    # Step 2: Process MPRA data
     processed_path = cache_dir / "processed_expression.csv"
-    if processed_path.exists():
-        print(f"  Loading cached: {processed_path}")
+    tfbs_dir = data_dir / "TFBS"
+
+    # For --tfbs_only, load existing processed data
+    if args.tfbs_only:
+        if not processed_path.exists():
+            print(f"Error: --tfbs_only requires existing processed data at {processed_path}")
+            print("Run without --tfbs_only first to download and process MPRA data.")
+            return
+        print("Loading existing processed data for TFBS regeneration...")
         df = pd.read_csv(processed_path)
     else:
-        df = process_mpra_data(counts_path, seqs_path)
-        df.to_csv(processed_path, index=False)
-        print(f"  Saved: {processed_path}")
+        # Step 1: Download MPRA data
+        print("Step 1: MPRA Data")
+        counts_path, seqs_path = download_mpra_data(cache_dir)
 
-    print_fitness_stats(df)
+        # Step 2: Process MPRA data
+        if processed_path.exists():
+            print(f"  Loading cached: {processed_path}")
+            df = pd.read_csv(processed_path)
+        else:
+            df = process_mpra_data(counts_path, seqs_path)
+            df.to_csv(processed_path, index=False)
+            print(f"  Saved: {processed_path}")
 
-    # Step 3: Generate RL initialization data
-    print("Step 2: RL Initialization Data")
-    rl_data_dir = data_dir / "human_promoters" / "rl_data_large"
-    generate_rl_init_data(df, rl_data_dir)
+        print_fitness_stats(df)
+
+        # Step 3: Generate RL initialization data
+        print("Step 2: RL Initialization Data")
+        rl_data_dir = data_dir / "human_promoters" / "rl_data_large"
+        generate_rl_init_data(df, rl_data_dir)
 
     # Step 4: Download JASPAR motifs
     print("\nStep 3: JASPAR Motifs")
-    tfbs_dir = data_dir / "TFBS"
     meme_path = download_jaspar_motifs(tfbs_dir)
     if meme_path is None:
         print("  Warning: Could not download JASPAR motifs")

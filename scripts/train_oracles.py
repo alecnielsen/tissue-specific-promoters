@@ -31,23 +31,48 @@ sys.path.insert(0, str(CTRL_DNA_PATH))
 from src.reglm.regression import EnformerModel, SeqDataset
 
 
+def validate_download(path: Path, min_size_kb: int = 10) -> bool:
+    """Validate downloaded file is not an HTML error page from Google Drive."""
+    if not path.exists():
+        return False
+    size_kb = path.stat().st_size / 1024
+    if size_kb < min_size_kb:
+        print(f"  WARNING: File too small ({size_kb:.1f} KB), may be an error page")
+        return False
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(100).decode('utf-8', errors='ignore').lower()
+            if '<!doctype' in header or '<html' in header:
+                print(f"  WARNING: File appears to be HTML (error page), not data")
+                return False
+    except Exception:
+        pass
+    return True
+
+
 def download_data(cache_dir: Path) -> tuple[Path, Path]:
     """Download raw MPRA data from Google Drive."""
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     counts_path = cache_dir / "Raw_Promoter_Counts.csv"
-    if not counts_path.exists():
+    if not counts_path.exists() or not validate_download(counts_path, min_size_kb=100):
+        if counts_path.exists():
+            counts_path.unlink()
         print(f"Downloading Raw_Promoter_Counts.csv to {counts_path}...")
         cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq' -o {shlex.quote(str(counts_path))}"
-        os.system(cmd)
-        assert counts_path.exists(), f"Failed to download {counts_path}"
+        ret = os.system(cmd)
+        if ret != 0 or not validate_download(counts_path, min_size_kb=100):
+            raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
 
     seqs_path = cache_dir / "final_list_of_all_promoter_sequences_fixed.tsv"
-    if not seqs_path.exists():
+    if not seqs_path.exists() or not validate_download(seqs_path, min_size_kb=100):
+        if seqs_path.exists():
+            seqs_path.unlink()
         print(f"Downloading sequence list to {seqs_path}...")
         cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG' -o {shlex.quote(str(seqs_path))}"
-        os.system(cmd)
-        assert seqs_path.exists(), f"Failed to download {seqs_path}"
+        ret = os.system(cmd)
+        if ret != 0 or not validate_download(seqs_path, min_size_kb=100):
+            raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
 
     return counts_path, seqs_path
 
