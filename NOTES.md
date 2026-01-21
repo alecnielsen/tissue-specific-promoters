@@ -25,6 +25,15 @@ Design tissue-specific promoters that are:
 
 **Status**: Fixed. Must retrain oracles with updated `train_oracles_modal.py`.
 
+### Minor Bug Fixed (2025-01-21)
+
+**Checkpoint/Eval Mismatch**: Test metrics were computed on last-epoch model, not best checkpoint:
+- PyTorch Lightning saves best checkpoint by val_loss
+- But evaluation used the in-memory model (last epoch)
+- Reported metrics could differ slightly from actual checkpoint performance
+
+**Impact**: Low - metrics were still MSE-based and from same training run, just potentially from different epoch. Retrain to get accurate metrics.
+
 ### Oracle Model Quality
 
 Training scripts now evaluate on held-out test set and report:
@@ -85,6 +94,7 @@ If this file exists and you run with `--tfbs True`, optimization will fail with 
 - [x] Run `scripts/prepare_data.py` - MPRA data and JASPAR motifs downloaded
 - [x] Fix critical loss mismatch bug in Modal training (2025-01-21)
 - [x] Add test set evaluation with R², Spearman ρ metrics
+- [x] Fix checkpoint/eval mismatch - now reloads best checkpoint before test eval (2025-01-21)
 
 ### ⚠️ Action Required: Retrain Oracles
 
