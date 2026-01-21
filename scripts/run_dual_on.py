@@ -20,6 +20,18 @@ import os
 import sys
 from pathlib import Path
 
+
+def str2bool(v):
+    """Parse boolean from string for argparse."""
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f'Boolean value expected, got {v}')
+
 # Resolve paths before changing directory
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
@@ -85,12 +97,12 @@ def parse_args():
     parser.add_argument("--level", type=str, default="hard")
     parser.add_argument("--e_size", type=int, default=100)
     parser.add_argument("--e_batch_size", type=int, default=24)
-    parser.add_argument("--priority", type=bool, default=True)
+    parser.add_argument("--priority", type=str2bool, default=True)
 
     # GRPO params
     parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--epsilon", type=float, default=0.2)
-    parser.add_argument("--grpo", type=bool, default=True)
+    parser.add_argument("--grpo", type=str2bool, default=True)
     parser.add_argument("--num_rewards", type=int, default=3)
     parser.add_argument("--top", type=int, default=10)
 
@@ -110,7 +122,7 @@ def parse_args():
     parser.add_argument('--off_constraint', default=0.3, type=float,
                         help="Constraint threshold for K562 (OFF target)")
 
-    parser.add_argument('--tfbs', default=False, type=bool)
+    parser.add_argument('--tfbs', default=False, type=str2bool)
     parser.add_argument('--tfbs_lambda', type=int, default=1)
     parser.add_argument('--tfbs_ratio', default=0.01, type=float)
     parser.add_argument('--tfbs_upper', default=0.01, type=float)
@@ -152,7 +164,8 @@ class DualOnOptimizer(Lagrange_optimizer):
     def score_enformer(self, dna):
         """Score sequences with dual ON reward structure."""
         if len(self.dna_buffer) > self.max_oracle_calls:
-            return 0
+            # Return zero tensor matching expected shape for consistency
+            return torch.zeros(3)
 
         # Score each cell type explicitly by key (not relying on dict order)
         scores_dict = {}
@@ -180,6 +193,139 @@ class DualOnOptimizer(Lagrange_optimizer):
             self.dna_buffer[dna] = [torch.tensor(scores), reward, len(self.dna_buffer) + 1, 1]
 
         return self.dna_buffer[dna][0]
+
+    def compute_combined_score(self, scores_multi, cfg):
+        """
+        Override to compute dual ON target reward.
+        scores_multi columns: [JURKAT (0), K562 (1), THP1 (2)]
+
+        Reward = on_weight * JURKAT + on_weight * THP1 - (K562 - off_constraint)
+        """
+        jurkat_scores = scores_multi[:, 0]  # ON target 1
+        k562_scores = scores_multi[:, 1]    # OFF target
+        thp1_scores = scores_multi[:, 2]    # ON target 2
+
+        scores = (
+            self.on_weight * jurkat_scores
+            + self.on_weight * thp1_scores
+            - (k562_scores - self.off_constraint)
+        )
+        return scores
+
+    def update(self, obs, old_logprobs, rewards, nonterms, episode_lens, correlations, cfg, metrics, log, iteration, epoch):
+        """
+        Override for dual-ON optimization (Option 1: combined reward approach).
+
+        Key difference from parent:
+        - Main advantages from combined ON signal (JURKAT + THP1)
+        - Only K562 treated as constraint (single lambda)
+
+        Indices: JURKAT=0, K562=1, THP1=2
+        """
+        from dna_optimizers_multi.lagrange_optimizer import get_advantages
+        import numpy as np
+
+        self.agent.train()
+
+        # --- Lambda update for K562 constraint only ---
+        k562_cost = rewards[-1, 1, :].mean(-1).unsqueeze(-1)  # K562 score
+
+        if correlations is not None:
+            self.update_lambda(torch.cat([k562_cost, torch.zeros_like(k562_cost), correlations.mean(-1).unsqueeze(-1).unsqueeze(-1)], dim=0))
+        else:
+            # Only update first lambda (K562), zero out others
+            self.update_lambda(torch.cat([k562_cost, torch.zeros_like(k562_cost)], dim=0))
+
+        # Clamp lambdas
+        for i in range(3):
+            self.lagrangian_multipliers[i].data.clamp_(min=0)
+
+        lambdas = np.array([lag.detach().numpy() for lag in self.lagrangian_multipliers])
+        for i in range(2):
+            self.lagrangian_multipliers[i].data.clamp_(min=lambdas[i], max=self.lambda_upper)
+        self.lagrangian_multipliers[2].data.clamp_(min=lambdas[2], max=self.tfbs_upper)
+
+        # --- Compute combined ON advantages ---
+        jurkat_scores = rewards[-1, 0]  # JURKAT
+        thp1_scores = rewards[-1, 2]    # THP1
+        k562_scores = rewards[-1, 1]    # K562
+
+        # Combined ON signal
+        combined_on = self.on_weight * jurkat_scores + self.on_weight * thp1_scores
+        combined_advantages = get_advantages(combined_on)
+
+        # K562 constraint advantages
+        k562_advantages = get_advantages(k562_scores)
+
+        # TFBS correlation advantages if present
+        if correlations is not None:
+            correlations_adv = get_advantages(correlations)
+            total_lambda = self.lagrangian_multipliers[0] + self.lagrangian_multipliers[2]
+        else:
+            total_lambda = self.lagrangian_multipliers[0]
+
+        # Soft inverse weighting (high lambda → lower boost)
+        boost = torch.clamp(2 + self.tfbs_upper - total_lambda, min=1.0)
+
+        # Final advantages: boost ON, penalize K562
+        if correlations is not None:
+            advantages = boost * combined_advantages - self.lagrangian_multipliers[0] * k562_advantages - self.lagrangian_multipliers[2] * correlations_adv
+        else:
+            advantages = boost * combined_advantages - self.lagrangian_multipliers[0] * k562_advantages
+
+        # --- PPO update ---
+        logprobs = self.agent.sequences_log_probs(obs, nonterms)
+        old_per_token_logps = old_logprobs.detach().to(logprobs.device)
+
+        coef_1 = torch.exp(logprobs - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+
+        per_token_loss1 = coef_1 * advantages.unsqueeze(0)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(0)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+
+        # KL penalty if beta != 0
+        if self.beta != 0.0:
+            ref_per_token_logps = self.ref_model.sequences_log_probs(obs, nonterms)
+            per_token_kl = (torch.exp(ref_per_token_logps - logprobs) - (ref_per_token_logps - logprobs) - 1)
+            per_token_loss += self.beta * per_token_kl
+
+        loss = per_token_loss.sum() / nonterms[:-1].sum()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.agent.parameters(), 0.5)
+        self.optimizer.step()
+
+        # --- Logging ---
+        if log:
+            import wandb
+            step = iteration * cfg.epoch + epoch
+
+            log_data = {
+                "update/pgloss": loss.item(),
+                "update/combined_on_mean": combined_on.mean().item(),
+                "update/jurkat_mean": jurkat_scores.mean().item(),
+                "update/thp1_mean": thp1_scores.mean().item(),
+                "update/k562_mean": k562_scores.mean().item(),
+                "update/kl_loss": per_token_kl.mean().item() if self.beta != 0.0 else 0.0,
+                "update/advantages": advantages.mean().item(),
+                "update/iteration": iteration,
+                "update/epoch": epoch,
+                "update/step": step,
+                "update/lambda_k562": self.lagrangian_multipliers[0].item(),
+            }
+
+            if correlations is not None and cfg.tfbs:
+                log_data["update/corr"] = (-correlations).mean().item()
+                log_data["update/lambda_tfbs"] = self.lagrangian_multipliers[2].item()
+
+            if cfg.epoch > 1:
+                wandb.log(log_data, step=step)
+            else:
+                wandb.log(log_data)
+
+            print(log_data)
 
 
 def main():

@@ -136,11 +136,12 @@ with open('$TRACKING_FILE', 'w') as f:
 EOF
 }
 
-# Collect source code from scripts/
+# Collect source code from scripts/ and Ctrl-DNA optimizer
 collect_source_code() {
     local output=""
     local scripts_dir="$REPO_ROOT/scripts"
 
+    # Collect scripts/*.py
     if [[ -d "$scripts_dir" ]]; then
         while IFS= read -r -d '' pyfile; do
             local rel_path="${pyfile#$REPO_ROOT/}"
@@ -152,17 +153,24 @@ $(cat "$pyfile")
         done < <(find "$scripts_dir" -name "*.py" -type f -print0 | sort -z)
     fi
 
-    # Also include relevant Ctrl-DNA files for context
-    local base_optimizer="$REPO_ROOT/Ctrl-DNA/ctrl_dna/dna_optimizers_multi/base_optimizer.py"
-    if [[ -f "$base_optimizer" ]]; then
-        output+="
-=== FILE: Ctrl-DNA/ctrl_dna/dna_optimizers_multi/base_optimizer.py (CONTEXT - DO NOT EDIT) ===
-$(head -200 "$base_optimizer")
-...
-(truncated for context)
+    # Collect Ctrl-DNA optimizer files (EDITABLE - not just context)
+    local optimizer_dir="$REPO_ROOT/Ctrl-DNA/ctrl_dna/dna_optimizers_multi"
+    local optimizer_files=(
+        "base_optimizer.py"
+        "lagrange_optimizer.py"
+    )
+
+    for file in "${optimizer_files[@]}"; do
+        local filepath="$optimizer_dir/$file"
+        if [[ -f "$filepath" ]]; then
+            local rel_path="${filepath#$REPO_ROOT/}"
+            output+="
+=== FILE: $rel_path ===
+$(cat "$filepath")
 
 "
-    fi
+        fi
+    done
 
     echo "$output"
 }

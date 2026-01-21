@@ -264,6 +264,8 @@ The loop will:
 4. Stop when `NO_ISSUES` or max iterations reached
 5. Detect stuck loops (same output twice = human intervention needed)
 
+**IMPORTANT for Claude sessions**: The loop is FULLY AUTOMATIC. Run it ONCE and let it complete on its own. Do NOT manually re-invoke between iterations - the script handles iteration automatically. If it exits with issues_found, just run it again once (it continues from tracking state). Never babysit or manually continue the loop.
+
 Review artifacts:
 - `review/tracking.yaml` - Status tracking
 - `review/logs/scripts_history.md` - Iteration history

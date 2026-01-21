@@ -1,21 +1,103 @@
-# Scientific Review: Ctrl-DNA Scripts
+# Scientific Review: Ctrl-DNA Scripts & Optimizer
 
-You are reviewing the `scripts/` directory of a tissue-specific promoter design project using Ctrl-DNA (constrained RL). The goal is to design promoters that are:
+You are reviewing the tissue-specific promoter design project using Ctrl-DNA (constrained RL). The goal is to design promoters that are:
 - **ON** in JURKAT (T-cells) and THP1 (macrophages)
 - **OFF** in K562 (hematopoietic progenitor, off-target proxy)
 
-## Scripts Under Review
+## Files Under Review
 
+### Scripts (`scripts/`)
 1. **train_oracles.py** - Train EnformerModel regressors on MPRA data (local GPU)
 2. **train_oracles_modal.py** - Same training logic but runs on Modal GPU
 3. **prepare_data.py** - Download MPRA data, JASPAR motifs, generate init files
 4. **run_dual_on.py** - Modified Ctrl-DNA optimizer for 2 ON + 1 OFF targets
 
+### Ctrl-DNA Optimizer (`Ctrl-DNA/ctrl_dna/dna_optimizers_multi/`)
+5. **base_optimizer.py** - Base optimizer class, model loading, scoring
+6. **lagrange_optimizer.py** - Lagrangian constrained optimization, training loop
+
 ## Review Focus Areas
 
-### 1. Data Pipeline Consistency
+### 1. PyTorch/Python Type Mixing (CRITICAL)
 
-The three data scripts must produce compatible outputs:
+Python builtins (`max`, `min`, `abs`) don't work with tensors in boolean contexts.
+
+**Verify:**
+- `max(a, b)` where either arg is a tensor → use `torch.maximum()` or `torch.clamp()`
+- `min(a, b)` where either arg is a tensor → use `torch.minimum()` or `torch.clamp()`
+- `if tensor:` comparisons → use `.item()` or explicit comparison
+
+**Known issue pattern:**
+```python
+# WRONG - will raise "Boolean value of Tensor is ambiguous"
+boost = max(1, 2 + self.tfbs_upper - total_lambda)
+
+# CORRECT
+boost = torch.clamp(2 + self.tfbs_upper - total_lambda, min=1.0)
+```
+
+### 2. Device Handling
+
+Code must work on CPU, single GPU, and multi-GPU setups.
+
+**Verify:**
+- No hardcoded `map_location='cuda:0'` in checkpoint loading
+- Use `self.device` or `cfg.device` consistently
+- Tensors created mid-function use the correct device
+
+**Known issue pattern:**
+```python
+# WRONG - breaks on CPU or cuda:1
+model = Model.load_from_checkpoint(path, map_location='cuda:0')
+
+# CORRECT
+model = Model.load_from_checkpoint(path, map_location=self.device)
+```
+
+### 3. Argparse Boolean Flags
+
+`type=bool` in argparse doesn't work as expected - `--flag False` evaluates to `True`.
+
+**Verify:**
+- Boolean args use `action='store_true'`/`'store_false'` OR a custom `str2bool` function
+- No `type=bool` in any argparse argument
+
+**Known issue pattern:**
+```python
+# WRONG - --priority False will be True because bool("False") == True
+parser.add_argument("--priority", type=bool, default=True)
+
+# CORRECT - use str2bool helper
+parser.add_argument("--priority", type=str2bool, default=True)
+```
+
+### 4. Parent/Child Class Scoring Consistency
+
+When a child class overrides scoring (e.g., `DualOnOptimizer`), the parent's training loop must use the override.
+
+**Verify:**
+- Training loop scoring uses an overridable method, not inline computation
+- Child class `score_enformer()` and training loop scoring produce consistent rewards
+- The `compute_combined_score()` method exists and is used in the training loop
+
+**Known issue pattern:**
+```python
+# WRONG - inline formula in parent ignores child's reward structure
+scores = scores_multi[:,task_idx] - (scores_multi[:,c1] - self.constraint[0]) + ...
+
+# CORRECT - use overridable method
+scores = self.compute_combined_score(scores_multi, cfg)
+```
+
+### 5. Wandb Initialization
+
+Multiple `wandb.init()` calls (e.g., in parent and child class) can error without `reinit=True`.
+
+**Verify:**
+- All `wandb.init()` calls include `reinit=True`
+- Or wandb is only initialized once in the inheritance chain
+
+### 6. Data Pipeline Consistency
 
 **Verify:**
 - Processed data filenames are consistent across scripts
@@ -23,75 +105,39 @@ The three data scripts must produce compatible outputs:
 - Column names match what downstream scripts expect
 - Fitness statistics (min/max) are computed consistently
 
-**Known issue pattern:**
-- Check if `processed.csv` vs `processed_expression.csv` naming is consistent
-- Check if stratification uses both GC content AND class, or just GC content
-
-### 2. Checkpoint Path and Naming
-
-Oracle checkpoints must be named correctly for Ctrl-DNA to load them.
+### 7. Checkpoint Path and Naming
 
 **Verify:**
 - Checkpoint filenames match what `base_optimizer.py` expects
 - Case sensitivity is handled correctly (e.g., `THP1` vs `thp1`)
 - The checkpoint format is: `human_{oracle_type}_{cell}.ckpt`
 
-**Expected format:**
-```
-checkpoints/
-├── human_paired_jurkat.ckpt
-├── human_paired_k562.ckpt
-└── human_paired_THP1.ckpt   # Note: case may matter
-```
-
-### 3. Reward Formula Correctness (run_dual_on.py)
-
-This is the core scientific logic. The reward must correctly implement:
-- Maximize expression in JURKAT and THP1
-- Minimize expression in K562
+### 8. Reward Formula Correctness
 
 **Verify:**
 - The reward formula in `score_enformer()` matches documentation
+- The `compute_combined_score()` override matches the child class intent
 - The `off_constraint` parameter is actually used (not hardcoded)
-- The starting sequence ranking uses the same formula as the optimizer
-- Lambda/constraint handling follows Lagrangian optimization principles
 
-**Expected reward structure:**
+**Expected dual-ON reward structure:**
 ```
-reward = on_weight * JURKAT + on_weight * THP1 - penalty * (K562 - constraint)
+reward = on_weight * JURKAT + on_weight * THP1 - (K562 - off_constraint)
 ```
 
-### 4. Train/Val Split Consistency
-
-The local and Modal training scripts should produce the same data splits for reproducibility.
-
-**Verify:**
-- Both scripts use the same random seed (97)
-- Both scripts use the same stratification strategy (GC content bins, class labels)
-- Both scripts use the same train/val/test proportions
-
-### 5. Path Handling and Working Directory
+### 9. Path Handling and Working Directory
 
 **Verify:**
 - `os.chdir()` doesn't break relative path arguments
 - Paths are absolute or resolved correctly before any directory changes
-- Default paths work when running from different directories
 
-### 6. JASPAR Motif File Handling
-
-**Verify:**
-- MEME format is correctly parsed
-- Selected PPMs list contains valid JASPAR matrix IDs
-- Motif file path is used consistently across scripts
-
-### 7. Return Type Consistency
+### 10. Return Type Consistency
 
 **Verify:**
 - Functions return consistent types (not sometimes int, sometimes tensor)
 - Error cases return appropriate values
 - Buffer overflow handling is correct
 
-### 8. Dict Ordering Assumptions
+### 11. Dict Ordering Assumptions
 
 **Verify:**
 - Code doesn't rely on implicit dict ordering for cell type indices

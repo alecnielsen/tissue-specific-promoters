@@ -11,6 +11,10 @@
 # - Read access to ~/.claude (for settings)
 # - Network access (required for Anthropic API)
 # - Keychain access (for subscription auth)
+#
+# IMPORTANT: This loop is FULLY AUTOMATIC. Run it ONCE and let it complete.
+# Do NOT manually re-invoke between iterations. The script iterates automatically
+# until NO_ISSUES or max iterations reached. Just wait for it to finish.
 
 set -euo pipefail
 
@@ -86,7 +90,7 @@ run_sandboxed() {
 
     # Run with sandbox
     local exit_code=0
-    sandbox-exec -f "$profile_file" "$SCRIPT_DIR/ralph_review.sh" "${args[@]}" || exit_code=$?
+    sandbox-exec -f "$profile_file" "$SCRIPT_DIR/ralph_review.sh" ${args[@]+"${args[@]}"} || exit_code=$?
 
     # Cleanup
     rm -f "$profile_file"
