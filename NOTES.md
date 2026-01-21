@@ -14,6 +14,66 @@ Design tissue-specific promoters that are:
 
 ---
 
+## Scientific Validity & Known Limitations
+
+### Critical Bug Fixed (2025-01-21)
+
+**Loss Type Mismatch**: The Modal-trained checkpoints had a critical bug where:
+- Training used MSE loss (correct for regression)
+- Inference incorrectly applied `exp()` to outputs (Poisson loss default)
+- This made all oracle scores scientifically invalid
+
+**Status**: Fixed. Must retrain oracles with updated `train_oracles_modal.py`.
+
+### Oracle Model Quality
+
+Training scripts now evaluate on held-out test set and report:
+- **R²** (coefficient of determination)
+- **Spearman ρ** (rank correlation - most important for optimization)
+- **Pearson r** (linear correlation)
+- **MAE/RMSE** (error magnitude)
+
+**Interpretation**:
+| Spearman ρ | Interpretation |
+|------------|----------------|
+| ≥ 0.7 | Good - oracle reliably ranks sequences |
+| 0.5–0.7 | Moderate - use with caution |
+| < 0.5 | Weak - oracle may misguide optimization |
+
+**Check your metrics**: After training, see `checkpoints/oracle_test_metrics.csv`
+
+### Biological Limitations
+
+| Issue | Severity | Mitigation |
+|-------|----------|------------|
+| **K562 ≠ HEK293** | High | K562 is hematopoietic, HEK293 is epithelial. Different TF repertoires. Must validate experimentally in HEK293. |
+| **MPRA vs genomic context** | Medium | MPRA uses episomal reporters. Promoter activity may differ when integrated. |
+| **250 bp sequences** | Medium | May miss distal regulatory elements. Consider longer context in future. |
+| **No chromatin context** | Medium | Oracle predicts from sequence alone, ignoring cell-type chromatin state. |
+
+### TFBS Constraint Validation
+
+If `pymemesuite` is not installed, TFBS files are placeholders (all zeros).
+
+**Check**: Look for `data/human_promoters/tfbs/.PLACEHOLDER_WARNING`
+
+If this file exists and you run with `--tfbs True`, optimization will fail with a clear error. Either:
+1. Install pymemesuite and regenerate: `pip install pymemesuite && python scripts/prepare_data.py`
+2. Run without TFBS: omit `--tfbs` flag (default is False)
+
+### Recommendations Before Wet Lab
+
+1. **Retrain oracles** with fixed Modal script
+2. **Check test metrics** - Spearman ρ ≥ 0.5 for all cell types
+3. **Run optimization** and analyze top sequences
+4. **Include controls** in validation:
+   - Known T-cell promoters (e.g., CD4, IL2)
+   - Known ubiquitous promoters (e.g., EF1α, CMV)
+   - Random sequences (negative control)
+5. **Test in HEK293** - K562 OFF does not guarantee HEK293 OFF
+
+---
+
 ## Setup Status
 
 ### Completed
@@ -23,15 +83,36 @@ Design tissue-specific promoters that are:
 - [x] Create dual ON target runner (`scripts/run_dual_on.py`)
 - [x] Create data preparation script (`scripts/prepare_data.py`)
 - [x] Run `scripts/prepare_data.py` - MPRA data and JASPAR motifs downloaded
-- [x] Train oracle models on Modal GPU (~10 min total, ~$2)
-  - JURKAT: val_loss=1.195, `checkpoints/human_paired_jurkat.ckpt`
-  - K562: val_loss=1.142, `checkpoints/human_paired_k562.ckpt`
-  - THP1: val_loss=0.494, `checkpoints/human_paired_THP1.ckpt`
+- [x] Fix critical loss mismatch bug in Modal training (2025-01-21)
+- [x] Add test set evaluation with R², Spearman ρ metrics
+
+### ⚠️ Action Required: Retrain Oracles
+
+Previous Modal-trained checkpoints have incorrect inference behavior (loss type mismatch).
+**Must retrain** with fixed script:
+
+```bash
+# Delete old checkpoints
+rm -f checkpoints/human_paired_*.ckpt
+
+# Retrain with fixed script
+modal run scripts/train_oracles_modal.py
+
+# Download new checkpoints
+modal volume get ctrl-dna-checkpoints human_paired_jurkat.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_k562.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_THP1.ckpt ./checkpoints/
+
+# Check test metrics (should see Spearman ρ ≥ 0.5)
+cat checkpoints/oracle_test_metrics.csv
+```
 
 ### Next Steps
+- [ ] **Retrain oracles** with fixed Modal script ← **START HERE**
+- [ ] Verify test metrics (Spearman ρ ≥ 0.5 for all)
 - [ ] Run Ctrl-DNA optimization (`scripts/run_dual_on.py`)
 - [ ] Analyze top sequences for cell-type specificity
-- [ ] Experimental validation in cell lines
+- [ ] Experimental validation in cell lines (including HEK293)
 
 ---
 
@@ -282,12 +363,46 @@ Review artifacts:
 
 1. ~~**Code Review**: Run `./review/ralph_review.sh` to fix known issues~~ ✅ Done
 2. ~~**Run Data Prep**: `python scripts/prepare_data.py --download_all`~~ ✅ Done
-3. ~~**Train Oracles**: `modal run scripts/train_oracles_modal.py`~~ ✅ Done (checkpoints in `./checkpoints/`)
-4. **Run Optimization**: `python scripts/run_dual_on.py` ← **START HERE**
-5. **Analyze Results**: Check top sequences for cell-type specificity
-6. **Experimental Validation**: Test designed promoters in cell lines
+3. ~~**Train Oracles**: `modal run scripts/train_oracles_modal.py`~~ ⚠️ **Must retrain** (bug fixed 2025-01-21)
+4. **Retrain Oracles**: See instructions below ← **START HERE**
+5. **Verify Metrics**: Check `oracle_test_metrics.csv` for Spearman ρ ≥ 0.5
+6. **Run Optimization**: `python scripts/run_dual_on.py`
+7. **Analyze Results**: Check top sequences for cell-type specificity
+8. **Experimental Validation**: Test in JURKAT, THP1, K562, **and HEK293**
 
-### To Run Optimization
+### Step 4: Retrain Oracles (Required)
+
+Previous checkpoints had a critical loss mismatch bug. Retrain:
+
+```bash
+cd /Users/alec/kernel/tissue-specific-promoters
+
+# Delete old (buggy) checkpoints
+rm -f checkpoints/human_paired_*.ckpt
+
+# Retrain with fixed script (includes test evaluation)
+modal run scripts/train_oracles_modal.py
+
+# Download new checkpoints
+modal volume get ctrl-dna-checkpoints human_paired_jurkat.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_k562.ckpt ./checkpoints/
+modal volume get ctrl-dna-checkpoints human_paired_THP1.ckpt ./checkpoints/
+```
+
+### Step 5: Verify Oracle Quality
+
+Check the test set metrics printed during training. Look for:
+- **Spearman ρ ≥ 0.5** for all cell types (minimum acceptable)
+- **Spearman ρ ≥ 0.7** is preferred for reliable optimization
+
+If metrics are poor, consider:
+- More training epochs (`--epochs 20`)
+- Larger model (`dim=768, depth=6` in script)
+- Data quality issues
+
+### Step 6: Run Optimization
+
+Only after verifying oracle quality:
 
 ```bash
 cd /Users/alec/kernel/tissue-specific-promoters
@@ -304,3 +419,5 @@ python scripts/run_dual_on.py \
 ```
 
 This will generate promoter sequences optimized for JURKAT+THP1 ON, K562 OFF.
+
+**Remember**: K562 OFF ≠ HEK293 OFF. Always validate in HEK293 experimentally.

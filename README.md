@@ -16,6 +16,8 @@ Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforce
 
 **Note**: K562 is a proxy for HEK293. Both are off-targets, but K562 is hematopoietic while HEK293 is epithelial. Results should be validated in HEK293.
 
+> ⚠️ **Scientific Validity**: See [NOTES.md](NOTES.md#scientific-validity--known-limitations) for important caveats about oracle model validation and biological assumptions.
+
 ### Future Phases
 
 - Add HEK293 oracle (from [PARM](https://github.com/vansteensellab/PARM) data)
