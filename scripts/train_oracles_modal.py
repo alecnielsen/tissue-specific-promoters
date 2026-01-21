@@ -170,18 +170,61 @@ def train_oracle(
             x, y = batch
             logits = self.forward(x, return_logits=True)
             loss = self.loss(logits, y)
-            self.log("train_loss", loss, logger=True, on_step=True, on_epoch=True, prog_bar=True)
-            return loss
+            self.log("train_loss", loss, logger=True, on_step=False, on_epoch=True, prog_bar=True)
+            return {"loss": loss, "preds": logits.detach(), "targets": y.detach()}
 
         def validation_step(self, batch, batch_idx):
             x, y = batch
             logits = self.forward(x, return_logits=True)
             loss = self.loss(logits, y)
-            self.log("val_loss", loss, logger=True, on_step=False, on_epoch=True)
-            return loss
+            self.log("val_loss", loss, logger=True, on_step=False, on_epoch=True, prog_bar=True)
+            return {"loss": loss, "preds": logits.detach(), "targets": y.detach()}
+
+        def _compute_r2(self, preds, targets):
+            """Compute R² from predictions and targets."""
+            ss_res = ((targets - preds) ** 2).sum()
+            ss_tot = ((targets - targets.mean()) ** 2).sum()
+            return 1 - ss_res / (ss_tot + 1e-8)
+
+        def on_train_epoch_end(self):
+            # Collect all predictions from training outputs
+            if hasattr(self, 'trainer') and self.trainer.train_dataloader:
+                all_preds, all_targets = [], []
+                self.eval()
+                with torch.no_grad():
+                    for batch in self.trainer.train_dataloader:
+                        x, y = batch
+                        x = x.to(self.device)
+                        preds = self.forward(x, return_logits=True)
+                        all_preds.append(preds.cpu())
+                        all_targets.append(y)
+                self.train()
+                if all_preds:
+                    preds = torch.cat(all_preds).flatten()
+                    targets = torch.cat(all_targets).flatten()
+                    r2 = self._compute_r2(preds, targets)
+                    self.log("train_r2", r2, logger=True, prog_bar=True)
+
+        def on_validation_epoch_end(self):
+            # Collect all predictions from validation outputs
+            if hasattr(self, 'trainer') and self.trainer.val_dataloaders:
+                all_preds, all_targets = [], []
+                self.eval()
+                with torch.no_grad():
+                    for batch in self.trainer.val_dataloaders:
+                        x, y = batch
+                        x = x.to(self.device)
+                        preds = self.forward(x, return_logits=True)
+                        all_preds.append(preds.cpu())
+                        all_targets.append(y)
+                if all_preds:
+                    preds = torch.cat(all_preds).flatten()
+                    targets = torch.cat(all_targets).flatten()
+                    r2 = self._compute_r2(preds, targets)
+                    self.log("val_r2", r2, logger=True, prog_bar=True)
 
         def configure_optimizers(self):
-            return optim.Adam(self.parameters(), lr=self.lr)
+            return optim.AdamW(self.parameters(), lr=self.lr, weight_decay=0.01)
 
     # Create datasets
     train_dataset = SeqDataset(train_data)
@@ -217,13 +260,22 @@ def train_oracle(
         save_top_k=1,
     )
 
+    # Early stopping to prevent overfitting
+    from pytorch_lightning.callbacks import EarlyStopping
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        patience=3,  # Stop if no improvement for 3 epochs
+        mode="min",
+        verbose=True,
+    )
+
     # Trainer
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator="gpu",
         devices=1,
         logger=CSVLogger(str(save_dir)),
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, early_stop_callback],
         enable_progress_bar=True,
     )
 
