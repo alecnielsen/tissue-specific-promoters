@@ -139,9 +139,77 @@ def compute_fitness_stats(df: pd.DataFrame, cell: str) -> tuple[float, float]:
     return float(values.min()), float(values.max())
 
 
+def evaluate_oracle(
+    model,
+    test_df: pd.DataFrame,
+    cell: str,
+    device: int = 0,
+    use_cpu: bool = False,
+) -> dict:
+    """
+    Evaluate oracle model on held-out test set.
+
+    Returns dict with R², Spearman correlation, Pearson correlation, MAE, RMSE.
+    """
+    from scipy import stats
+
+    # Create test dataset
+    test_single = test_df[["sequence", cell]].copy()
+    test_dataset = SeqDataset(test_single, seq_len=250)
+
+    # Get predictions
+    model.eval()
+    predictions = []
+    targets = []
+
+    from torch.utils.data import DataLoader
+    test_dl = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=0)
+
+    import torch
+    device_obj = torch.device("cpu" if use_cpu else f"cuda:{device}")
+    model = model.to(device_obj)
+
+    with torch.no_grad():
+        for batch in test_dl:
+            x, y = batch
+            x = x.to(device_obj)
+            pred = model(x, return_logits=True)  # Get raw logits for MSE comparison
+            predictions.extend(pred.cpu().numpy().flatten().tolist())
+            targets.extend(y.numpy().flatten().tolist())
+
+    predictions = np.array(predictions)
+    targets = np.array(targets)
+
+    # Compute metrics
+    # R² (coefficient of determination)
+    ss_res = np.sum((targets - predictions) ** 2)
+    ss_tot = np.sum((targets - np.mean(targets)) ** 2)
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    # Correlations
+    spearman_r, spearman_p = stats.spearmanr(predictions, targets)
+    pearson_r, pearson_p = stats.pearsonr(predictions, targets)
+
+    # Error metrics
+    mae = np.mean(np.abs(predictions - targets))
+    rmse = np.sqrt(np.mean((predictions - targets) ** 2))
+
+    return {
+        "r2": r2,
+        "spearman_r": spearman_r,
+        "spearman_p": spearman_p,
+        "pearson_r": pearson_r,
+        "pearson_p": pearson_p,
+        "mae": mae,
+        "rmse": rmse,
+        "n_samples": len(targets),
+    }
+
+
 def train_oracle(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     cell: str,
     checkpoint_dir: Path,
     epochs: int = 10,
@@ -149,8 +217,13 @@ def train_oracle(
     lr: float = 1e-4,
     device: int = 0,
     use_cpu: bool = False,
-):
-    """Train an EnformerModel oracle for a single cell type."""
+) -> tuple:
+    """
+    Train an EnformerModel oracle for a single cell type and evaluate on test set.
+
+    Returns:
+        tuple: (model, test_metrics dict)
+    """
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Create single-task datasets (sequence + one label column)
@@ -163,6 +236,7 @@ def train_oracle(
     print(f"\nTraining oracle for {cell}")
     print(f"  Train samples: {len(train_dataset)}")
     print(f"  Val samples: {len(val_dataset)}")
+    print(f"  Test samples: {len(test_df)}")
     print(f"  Device: {'CPU' if use_cpu else f'GPU {device}'}")
 
     # Initialize model
@@ -190,17 +264,37 @@ def train_oracle(
 
     # Copy best checkpoint to expected location
     best_ckpt = list(save_dir.rglob("*.ckpt"))
+    checkpoint_path = None
     if best_ckpt:
         # Sort by modification time, get most recent (best)
         best_ckpt = sorted(best_ckpt, key=lambda p: p.stat().st_mtime)[-1]
         # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
         cell_name = cell if cell == "THP1" else cell.lower()
-        target_path = checkpoint_dir / f"human_paired_{cell_name}.ckpt"
+        checkpoint_path = checkpoint_dir / f"human_paired_{cell_name}.ckpt"
         import shutil
-        shutil.copy(best_ckpt, target_path)
-        print(f"  Saved checkpoint: {target_path}")
+        shutil.copy(best_ckpt, checkpoint_path)
+        print(f"  Saved checkpoint: {checkpoint_path}")
 
-    return model
+    # Evaluate on test set
+    print(f"\n  Evaluating on test set...")
+    test_metrics = evaluate_oracle(model, test_df, cell, device=device, use_cpu=use_cpu)
+
+    print(f"\n  === Test Set Metrics for {cell} ===")
+    print(f"  R²:              {test_metrics['r2']:.4f}")
+    print(f"  Spearman ρ:      {test_metrics['spearman_r']:.4f} (p={test_metrics['spearman_p']:.2e})")
+    print(f"  Pearson r:       {test_metrics['pearson_r']:.4f} (p={test_metrics['pearson_p']:.2e})")
+    print(f"  MAE:             {test_metrics['mae']:.4f}")
+    print(f"  RMSE:            {test_metrics['rmse']:.4f}")
+    print(f"  N samples:       {test_metrics['n_samples']}")
+
+    # Warn if correlation is low
+    if test_metrics['spearman_r'] < 0.5:
+        print(f"\n  ⚠️  WARNING: Spearman ρ < 0.5 indicates weak predictive power!")
+        print(f"      This oracle may not reliably guide optimization.")
+    elif test_metrics['spearman_r'] < 0.7:
+        print(f"\n  ⚠️  CAUTION: Spearman ρ < 0.7 indicates moderate predictive power.")
+
+    return model, test_metrics
 
 
 def generate_rl_init_data(
@@ -308,12 +402,15 @@ def main():
         print("\nData download complete. Skipping training.")
         return
 
-    # Train oracles
+    # Train oracles and collect metrics
     cells = ["JURKAT", "K562", "THP1"] if args.cell == "all" else [args.cell]
+    all_metrics = {}
+
     for cell in cells:
-        train_oracle(
+        model, metrics = train_oracle(
             train_df,
             val_df,
+            test_df,
             cell,
             checkpoint_dir,
             epochs=args.epochs,
@@ -322,9 +419,42 @@ def main():
             device=args.device,
             use_cpu=args.cpu,
         )
+        all_metrics[cell] = metrics
 
-    print("\nTraining complete!")
-    print(f"Checkpoints saved to: {checkpoint_dir}")
+    # Print summary
+    print("\n" + "="*70)
+    print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY")
+    print("="*70)
+    print(f"\n{'Cell Type':<12} {'R²':>8} {'Spearman ρ':>12} {'Pearson r':>12} {'RMSE':>8}")
+    print("-"*56)
+
+    any_warnings = False
+    for cell, metrics in all_metrics.items():
+        print(f"{cell:<12} {metrics['r2']:>8.4f} {metrics['spearman_r']:>12.4f} {metrics['pearson_r']:>12.4f} {metrics['rmse']:>8.4f}")
+        if metrics['spearman_r'] < 0.5:
+            any_warnings = True
+
+    print("-"*56)
+
+    if any_warnings:
+        print("\n⚠️  WARNING: One or more oracles have Spearman ρ < 0.5")
+        print("   This indicates weak predictive power. Consider:")
+        print("   - Training for more epochs")
+        print("   - Using more training data")
+        print("   - Checking data quality")
+        print("   - Using a larger model architecture")
+    else:
+        print("\n✓ All oracles have acceptable predictive power (Spearman ρ ≥ 0.5)")
+
+    print(f"\nCheckpoints saved to: {checkpoint_dir}")
+
+    # Save metrics to file
+    metrics_path = checkpoint_dir / "oracle_test_metrics.csv"
+    import pandas as pd
+    metrics_df = pd.DataFrame(all_metrics).T
+    metrics_df.index.name = "cell_type"
+    metrics_df.to_csv(metrics_path)
+    print(f"Metrics saved to: {metrics_path}")
 
 
 if __name__ == "__main__":

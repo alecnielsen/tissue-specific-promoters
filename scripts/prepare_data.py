@@ -278,9 +278,25 @@ def generate_tfbs_frequencies(
 
 
 def _create_placeholder_tfbs(df: pd.DataFrame, output_dir: Path, ppms_path: Path):
-    """Create placeholder TFBS files when pymemesuite is not available."""
+    """
+    Create placeholder TFBS files when pymemesuite is not available.
+
+    WARNING: These files contain ALL ZEROS and are NOT valid for TFBS-constrained
+    optimization. A marker file is created to detect this condition at runtime.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     selected = pd.read_csv(ppms_path).Matrix_id.tolist()
+
+    print("\n" + "="*70)
+    print("WARNING: Creating PLACEHOLDER TFBS files (all zeros)")
+    print("="*70)
+    print("These files are NOT valid for TFBS-constrained optimization!")
+    print("If you run with --tfbs True, the correlation penalty will be meaningless.")
+    print("")
+    print("To fix: Install pymemesuite and re-run prepare_data.py:")
+    print("  pip install pymemesuite")
+    print("  python scripts/prepare_data.py --download_all")
+    print("="*70 + "\n")
 
     for cell in CELL_TYPES:
         # Create empty frequency table with correct columns
@@ -296,6 +312,20 @@ def _create_placeholder_tfbs(df: pd.DataFrame, output_dir: Path, ppms_path: Path
         output_path = output_dir / f"{cell}_tfbs_freq_all.csv"
         freq_df.to_csv(output_path, index=False)
         print(f"  Saved placeholder: {output_path}")
+
+    # Create marker file to indicate these are placeholders
+    marker_path = output_dir / ".PLACEHOLDER_WARNING"
+    marker_path.write_text(
+        "WARNING: TFBS files in this directory are PLACEHOLDERS (all zeros).\n"
+        "They were created because pymemesuite was not installed.\n"
+        "Do NOT use --tfbs True with these files - the optimization will be invalid.\n"
+        "\n"
+        "To fix:\n"
+        "  1. pip install pymemesuite\n"
+        "  2. rm -rf this_directory\n"
+        "  3. python scripts/prepare_data.py --download_all\n"
+    )
+    print(f"  Created marker: {marker_path}")
 
 
 def print_fitness_stats(df: pd.DataFrame):

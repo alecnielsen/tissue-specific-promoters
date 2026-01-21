@@ -49,6 +49,74 @@ from dna_optimizers_multi.base_optimizer import get_fitness_info
 from dna_optimizers_multi.lagrange_optimizer import Lagrange_optimizer
 
 
+def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
+    """
+    Validate TFBS files before starting optimization.
+
+    Checks for:
+    1. Placeholder marker file (created when pymemesuite was missing)
+    2. All-zero TFBS frequency files
+
+    Raises:
+        SystemExit: If tfbs_enabled=True and files are invalid
+    """
+    tfbs_freq_dir = Path(data_dir) / "human_promoters" / "tfbs"
+
+    # Check for placeholder marker
+    marker_path = tfbs_freq_dir / ".PLACEHOLDER_WARNING"
+    if marker_path.exists():
+        if tfbs_enabled:
+            print("\n" + "="*70)
+            print("ERROR: TFBS files are PLACEHOLDERS (all zeros)")
+            print("="*70)
+            print(f"Marker file found: {marker_path}")
+            print("")
+            print("You have --tfbs enabled, but the TFBS files are invalid.")
+            print("The TFBS correlation penalty would be meaningless.")
+            print("")
+            print("Options:")
+            print("  1. Disable TFBS: Remove --tfbs flag (default is False)")
+            print("  2. Fix TFBS files:")
+            print("     pip install pymemesuite")
+            print("     rm -rf", tfbs_freq_dir)
+            print("     python scripts/prepare_data.py --download_all")
+            print("="*70 + "\n")
+            sys.exit(1)
+        else:
+            print(f"Note: TFBS files are placeholders, but --tfbs is disabled (OK)")
+            return
+
+    # Even without marker, check if files exist and have non-zero values
+    if tfbs_enabled:
+        cell_types = ["JURKAT", "K562", "THP1"]
+        for cell in cell_types:
+            tfbs_path = tfbs_freq_dir / f"{cell}_tfbs_freq_all.csv"
+            if not tfbs_path.exists():
+                print(f"\nERROR: TFBS file not found: {tfbs_path}")
+                print("Run: python scripts/prepare_data.py --download_all")
+                sys.exit(1)
+
+            # Check if file has any non-zero values
+            try:
+                df = pd.read_csv(tfbs_path)
+                # Drop SeqID column and check numeric columns
+                numeric_cols = [c for c in df.columns if c != "SeqID"]
+                if len(numeric_cols) == 0:
+                    print(f"\nERROR: TFBS file has no motif columns: {tfbs_path}")
+                    sys.exit(1)
+                total_sum = df[numeric_cols].sum().sum()
+                if total_sum == 0:
+                    print(f"\nERROR: TFBS file is all zeros: {tfbs_path}")
+                    print("This indicates placeholder data. TFBS optimization would be invalid.")
+                    print("Run: python scripts/prepare_data.py --download_all")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"\nERROR: Could not validate TFBS file {tfbs_path}: {e}")
+                sys.exit(1)
+
+        print("TFBS files validated successfully")
+
+
 def resolve_path(path_str):
     """Resolve a path string relative to the project root."""
     path = Path(path_str)
@@ -338,6 +406,9 @@ def main():
     args.tfbs_dir = resolve_path(args.tfbs_dir)
     args.data_dir = resolve_path(args.data_dir)
     args.checkpoint_dir = resolve_path(args.checkpoint_dir)
+
+    # Validate TFBS files if TFBS optimization is enabled
+    validate_tfbs_files(args.data_dir, args.tfbs)
 
     # Set seed
     set_seed(args.seed)
