@@ -311,7 +311,7 @@ class DualOnOptimizer(Lagrange_optimizer):
         for i in range(3):
             self.lagrangian_multipliers[i].data.clamp_(min=0)
 
-        lambdas = np.array([lag.detach().numpy() for lag in self.lagrangian_multipliers])
+        lambdas = np.array([lag.detach().cpu().numpy() for lag in self.lagrangian_multipliers])
         for i in range(2):
             self.lagrangian_multipliers[i].data.clamp_(min=lambdas[i], max=self.lambda_upper)
         self.lagrangian_multipliers[2].data.clamp_(min=lambdas[2], max=self.tfbs_upper)

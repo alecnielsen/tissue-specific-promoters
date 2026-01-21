@@ -7,6 +7,9 @@ dependencies = [
     "numpy",
     "pandas",
     "torch",
+    "pytorch-lightning",
+    "enformer-pytorch",
+    "scipy",
     "scikit-learn",
     "biopython",
     "jupyter",
@@ -16,6 +19,20 @@ dependencies = [
 dev = [
     "pytest",
     "ruff",
+]
+modal = [
+    "modal",
+]
+tfbs = [
+    "pymemesuite",
+]
+logging = [
+    "wandb",
+]
+all = [
+    "modal",
+    "pymemesuite",
+    "wandb",
 ]
 
 [build-system]

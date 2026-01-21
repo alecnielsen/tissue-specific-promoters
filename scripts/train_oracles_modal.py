@@ -242,6 +242,12 @@ def train_oracle(
         print(f"\nSaved checkpoint: {final_path}")
         print(f"  loss_type in checkpoint: mse (will NOT exponentiate on inference)")
 
+    # Reload best checkpoint for evaluation (model object may be from last epoch, not best)
+    if best_ckpt:
+        print(f"  Reloading best checkpoint for evaluation...")
+        model = EnformerModel.load_from_checkpoint(best_ckpt)
+        model.cuda()
+
     # Evaluate on test set
     print(f"\n  Evaluating on test set ({len(test_data)} samples)...")
     test_dataset = SeqDataset(test_data)

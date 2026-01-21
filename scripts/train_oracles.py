@@ -275,6 +275,14 @@ def train_oracle(
         shutil.copy(best_ckpt, checkpoint_path)
         print(f"  Saved checkpoint: {checkpoint_path}")
 
+    # Reload best checkpoint for evaluation (model object may be from last epoch, not best)
+    if checkpoint_path and checkpoint_path.exists():
+        print(f"  Reloading best checkpoint for evaluation...")
+        import torch
+        device_obj = torch.device("cpu" if use_cpu else f"cuda:{device}")
+        model = EnformerModel.load_from_checkpoint(str(checkpoint_path), map_location=device_obj)
+        model.to(device_obj)
+
     # Evaluate on test set
     print(f"\n  Evaluating on test set...")
     test_metrics = evaluate_oracle(model, test_df, cell, device=device, use_cpu=use_cpu)

@@ -30,11 +30,44 @@ SEQ_LEN = 250
 JASPAR_URL = "https://jaspar.elixir.no/download/data/2024/CORE/JASPAR2024_CORE_vertebrates_non-redundant_pfms_meme.txt"
 
 
-def download_file(url: str, dest: Path) -> bool:
-    """Download file if it doesn't exist."""
+def validate_download(path: Path, min_size_kb: int = 10) -> bool:
+    """
+    Validate a downloaded file is not an error page.
+
+    Google Drive can return HTML error pages (quota exceeded, etc.)
+    that get saved as the target file. This checks for common issues.
+    """
+    if not path.exists():
+        return False
+
+    # Check minimum file size (error pages are usually small)
+    size_kb = path.stat().st_size / 1024
+    if size_kb < min_size_kb:
+        print(f"  WARNING: File too small ({size_kb:.1f} KB), may be an error page")
+        return False
+
+    # Check for HTML content (error pages start with <!DOCTYPE or <html>)
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(100).decode('utf-8', errors='ignore').lower()
+            if '<!doctype' in header or '<html' in header:
+                print(f"  WARNING: File appears to be HTML (error page), not data")
+                return False
+    except Exception:
+        pass  # If we can't read it, assume it's OK
+
+    return True
+
+
+def download_file(url: str, dest: Path, min_size_kb: int = 10) -> bool:
+    """Download file if it doesn't exist, with validation."""
     if dest.exists():
-        print(f"  Already exists: {dest}")
-        return True
+        if validate_download(dest, min_size_kb):
+            print(f"  Already exists: {dest}")
+            return True
+        else:
+            print(f"  Existing file is invalid, re-downloading...")
+            dest.unlink()
 
     print(f"  Downloading {url}")
     cmd = f"curl -L '{url}' -o {shlex.quote(str(dest))} 2>/dev/null"
@@ -42,6 +75,11 @@ def download_file(url: str, dest: Path) -> bool:
     if ret != 0 or not dest.exists():
         print(f"  Failed to download {url}")
         return False
+
+    if not validate_download(dest, min_size_kb):
+        print(f"  Download validation failed for {dest}")
+        return False
+
     return True
 
 
@@ -50,16 +88,24 @@ def download_mpra_data(cache_dir: Path) -> tuple[Path, Path]:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     counts_path = cache_dir / "Raw_Promoter_Counts.csv"
-    if not counts_path.exists():
+    if not counts_path.exists() or not validate_download(counts_path, min_size_kb=100):
+        if counts_path.exists():
+            counts_path.unlink()
         print("Downloading Raw_Promoter_Counts.csv...")
         cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq' -o {shlex.quote(str(counts_path))}"
-        os.system(cmd)
+        ret = os.system(cmd)
+        if ret != 0 or not validate_download(counts_path, min_size_kb=100):
+            raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
 
     seqs_path = cache_dir / "final_list_of_all_promoter_sequences_fixed.tsv"
-    if not seqs_path.exists():
+    if not seqs_path.exists() or not validate_download(seqs_path, min_size_kb=100):
+        if seqs_path.exists():
+            seqs_path.unlink()
         print("Downloading sequence list...")
         cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG' -o {shlex.quote(str(seqs_path))}"
-        os.system(cmd)
+        ret = os.system(cmd)
+        if ret != 0 or not validate_download(seqs_path, min_size_kb=100):
+            raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
 
     return counts_path, seqs_path
 
