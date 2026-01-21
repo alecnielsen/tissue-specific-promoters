@@ -276,6 +276,11 @@ def train_oracle(
 
     # Train
     save_dir = checkpoint_dir / f"{cell}_training"
+    # Clean up old checkpoints to avoid selecting stale models
+    if save_dir.exists():
+        for old_ckpt in save_dir.rglob("*.ckpt"):
+            old_ckpt.unlink()
+            print(f"  Removed old checkpoint: {old_ckpt}")
     trainer = model.train_on_dataset(
         train_dataset,
         val_dataset,

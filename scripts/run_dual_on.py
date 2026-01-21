@@ -407,6 +407,7 @@ def main():
     args.tfbs_dir = resolve_path(args.tfbs_dir)
     args.data_dir = resolve_path(args.data_dir)
     args.checkpoint_dir = resolve_path(args.checkpoint_dir)
+    args.out_dir = resolve_path(args.out_dir)
 
     # Validate TFBS files if TFBS optimization is enabled
     validate_tfbs_files(args.data_dir, args.tfbs)
