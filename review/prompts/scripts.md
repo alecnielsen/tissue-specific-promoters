@@ -100,20 +100,20 @@ The local and Modal training scripts should produce the same data splits for rep
 
 ## Output Format
 
+**CRITICAL RULE**: If you use the Edit tool or Write tool AT ALL during this review, you MUST NOT output "NO_ISSUES". You must output "FIXES_MADE" instead.
+
 If you find **code issues**:
 1. **FIX THEM** by editing the code files directly
 2. Then report what you fixed:
    - File path and line number
    - Description of what was wrong
    - What you changed and why
-3. Do NOT say "NO_ISSUES" - another iteration will verify your fixes
+3. End your response with exactly: FIXES_MADE
 
-If you reviewed the code and found **no issues to fix**, respond with exactly:
+If you reviewed the code and made **ZERO file edits**, respond with exactly:
 NO_ISSUES
 
 **Important notes:**
-- Do not just report issues - actually edit the files to fix them
-- Do not invent issues if the code is correct. Only fix genuine problems.
-- Documentation updates (README, NOTES.md) do NOT count as code issues
-- Only say "NO_ISSUES" if you made zero edits this iteration
-- If you fixed anything, report it and let the next iteration verify
+- "NO_ISSUES" means you used ZERO Edit/Write tools this iteration
+- If you edited ANY file for ANY reason, you MUST say "FIXES_MADE"
+- The next iteration will verify your fixes with fresh context
