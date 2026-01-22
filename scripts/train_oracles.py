@@ -440,12 +440,14 @@ def main():
         merged.to_csv(processed_path, index=False)
         print(f"Saved processed data to {processed_path}")
 
+    # Use train+val only for normalization and RL init to avoid test leakage
+    stats_data = pd.concat([train_df, val_df]).reset_index(drop=True)
+
     # Print fitness statistics
     print("\nFitness statistics (for normalization):")
     cell_stats = {}
     for cell in ["JURKAT", "K562", "THP1"]:
-        all_data = pd.concat([train_df, val_df, test_df])
-        min_fit, max_fit = compute_fitness_stats(all_data, cell)
+        min_fit, max_fit = compute_fitness_stats(stats_data, cell)
         print(f"  {cell}: min={min_fit:.6f}, max={max_fit:.6f}")
         cell_stats[cell] = (min_fit, max_fit)
 
@@ -453,11 +455,10 @@ def main():
         seq_len = len(train_df["sequence"].iloc[0]) if len(train_df) else 250
         write_fitness_ranges(checkpoint_dir / "fitness_ranges.json", cell_stats, seq_len)
 
-    # Generate RL initialization data
+    # Generate RL initialization data (train+val only)
     rl_data_dir = data_dir / "human_promoters" / "rl_data_large"
-    all_data = pd.concat([train_df, val_df, test_df])
     for cell in ["JURKAT", "K562", "THP1"]:
-        generate_rl_init_data(all_data, cell, rl_data_dir)
+        generate_rl_init_data(stats_data, cell, rl_data_dir)
 
     if args.download_only:
         print("\nData download complete. Skipping training.")

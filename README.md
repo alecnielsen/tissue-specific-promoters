@@ -18,6 +18,29 @@ Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforce
 
 > ⚠️ **Scientific Validity**: See [NOTES.md](NOTES.md#scientific-validity--known-limitations) for important caveats about oracle model validation and biological assumptions.
 
+## Scientific Assumptions & Decisions (Critical)
+
+This project makes explicit biological and modeling assumptions that affect validity. Short version:
+
+- **Off-target proxy**: K562 is used as an OFF target proxy for HEK293 (hematopoietic vs epithelial). Promoters must still be validated in HEK293.
+- **MPRA context**: Oracles are trained on episomal MPRA data; activity may differ in genomic integration.
+- **Sequence length**: 250 bp promoters may miss distal regulatory context.
+- **No chromatin context**: Oracles score sequence only; chromatin state is ignored.
+- **Oracle quality gate**: Use Spearman ρ ≥ 0.5 (prefer ≥ 0.7) on held-out test data; weaker models can misguide RL.
+- **TFBS constraints**: If TFBS files are placeholders (all zeros), do not use `--tfbs True`.
+- **Normalization**: Ctrl-DNA normalizes scores using min/max fitness ranges; update `checkpoints/fitness_ranges.json` after retraining oracles.
+
+For full context and mitigations, see [NOTES.md](NOTES.md).
+
+## Workflow (End-to-End)
+
+1. **Prepare data** (downloads MPRA + motifs, builds RL init + TFBS files): `python scripts/prepare_data.py --download_all`
+2. **Train oracles** (Modal GPU or local): `modal run scripts/train_oracles_modal.py` or `python scripts/train_oracles.py --cell all --epochs 10`
+3. **Quality gate**: Check Spearman ρ in `checkpoints/oracle_test_metrics.csv` (≥ 0.5).
+4. **Write fitness ranges** (recommended after retrain): `python scripts/train_oracles.py --cell all --epochs 10 --write_fitness_ranges`
+5. **Run optimization**: `python scripts/run_dual_on.py --epoch 5 --max_iter 100 ...`
+6. **Analyze top sequences** and **validate experimentally** (including HEK293).
+
 ### Future Phases
 
 - Add HEK293 oracle (from [PARM](https://github.com/vansteensellab/PARM) data)

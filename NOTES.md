@@ -12,6 +12,27 @@ Design tissue-specific promoters that are:
 2. **Phase 1 cell types**: JURKAT (T-cell ON), THP1 (macrophage ON), K562 (OFF proxy)
 3. **K562 limitation**: It's hematopoietic, not epithelial like HEK293. Designed promoters may still be active in HEK293 - validate experimentally.
 
+## Critical Assumptions (Explicit)
+
+- **Off-target proxy**: K562 is used as the OFF target proxy for HEK293 (hematopoietic vs epithelial).
+- **Assay context**: MPRA data are episomal; genomic integration can change activity.
+- **Sequence window**: 250 bp promoters may miss distal regulatory signals.
+- **Chromatin context**: Oracles ignore chromatin state and 3D context.
+- **Oracle quality**: Optimization assumes oracles rank sequences reliably (Spearman ρ ≥ 0.5; prefer ≥ 0.7).
+- **TFBS constraints**: TFBS-based constraints are only valid if motif scans are real (not placeholders).
+
+## Workflow (Gated)
+
+Use this as the **go/no-go** checklist before moving to wet lab.
+
+1. **Prepare data**: `python scripts/prepare_data.py --download_all`
+2. **Train oracles** (Modal or local).
+3. **Quality gate**: Spearman ρ ≥ 0.5 for all oracles in `checkpoints/oracle_test_metrics.csv`.
+4. **Write fitness ranges** after retrain: `python scripts/train_oracles.py --write_fitness_ranges`
+5. **Run RL optimization** with `scripts/run_dual_on.py`.
+6. **Analyze top sequences** (specificity, motifs, controls).
+7. **Validate experimentally** in JURKAT, THP1, and **HEK293** (required).
+
 ---
 
 ## Scientific Validity & Known Limitations

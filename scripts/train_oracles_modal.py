@@ -27,7 +27,7 @@ app = modal.App(name="ctrl-dna-oracle-training")
 # Get the repo root for mounting
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 
-# Image with all dependencies
+# Image with all dependencies and local repo snapshot
 training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -38,11 +38,11 @@ training_image = (
         "numpy",
         "scipy",
     )
+    .add_local_dir(REPO_ROOT, remote_path="/repo", copy=True)
 )
 
 # Volume to persist checkpoints
 checkpoint_volume = modal.Volume.from_name("ctrl-dna-checkpoints", create_if_missing=True)
-
 
 @app.function(
     image=training_image,
@@ -67,15 +67,15 @@ def train_oracle(
     at inference time (base_optimizer.py loads with regression.EnformerModel).
     """
     import torch
-    from torch import nn, optim
-    import pytorch_lightning as pl
-    from pytorch_lightning.callbacks import ModelCheckpoint
-    from pytorch_lightning.loggers import CSVLogger
-    from torch.utils.data import DataLoader, Dataset
-    from enformer_pytorch import Enformer
-    from enformer_pytorch.data import str_to_one_hot
+    from torch.utils.data import DataLoader
     import numpy as np
     from pathlib import Path
+    import pandas as pd
+    import sys
+
+    # Use canonical Ctrl-DNA model/dataset to avoid drift
+    sys.path.insert(0, "/repo/Ctrl-DNA/ctrl_dna")
+    from src.reglm.regression import EnformerModel, SeqDataset
 
     print(f"\n{'='*50}")
     print(f"Training oracle for {cell}")
@@ -87,222 +87,82 @@ def train_oracle(
     print(f"  Loss type: MSE (explicitly set for checkpoint compatibility)")
     print(f"{'='*50}\n")
 
-    # Dataset class
-    class SeqDataset(Dataset):
-        def __init__(self, data: list[dict], seq_len: int = 250):
-            self.seqs = [d["sequence"] for d in data]
-            self.labels = torch.tensor([d["label"] for d in data], dtype=torch.float32)
-            self.seq_len = seq_len
-
-        def __len__(self):
-            return len(self.seqs)
-
-        def __getitem__(self, idx):
-            seq = self.seqs[idx]
-            if len(seq) < self.seq_len:
-                seq = seq + "N" * (self.seq_len - len(seq))
-            seq_onehot = str_to_one_hot(seq)
-            return seq_onehot, self.labels[idx].unsqueeze(0)
-
-    # EnformerModel class - MUST match regression.py signature exactly!
-    # This ensures load_from_checkpoint() restores loss_type correctly.
-    class EnformerModel(pl.LightningModule):
-        """
-        Enformer-based regression model matching regression.py signature.
-
-        CRITICAL: The __init__ signature must match regression.py exactly,
-        including the 'loss' parameter, so that save_hyperparameters()
-        stores it and load_from_checkpoint() restores it correctly.
-        """
-        def __init__(
-            self,
-            lr=1e-4,
-            loss="mse",  # CRITICAL: Must match regression.py signature
-            pretrained=False,
-            dim=1536,
-            depth=11,
-            n_downsamples=7,
-        ):
-            super().__init__()
-            self.n_tasks = 1
-            self.save_hyperparameters()  # Saves all args including 'loss'
-
-            # Build model
-            if pretrained:
-                self.trunk = Enformer.from_pretrained(
-                    "EleutherAI/enformer-official-rough", target_length=-1
-                )._trunk
-            else:
-                self.trunk = Enformer.from_hparams(
-                    dim=dim,
-                    depth=depth,
-                    heads=8,
-                    num_downsamples=n_downsamples,
-                    target_length=-1,
-                )._trunk
-            self.head = nn.Linear(dim * 2, self.n_tasks, bias=True)
-
-            # Training params
-            self.lr = lr
-            self.loss_type = loss  # CRITICAL: Store for forward() check
-            if loss == "poisson":
-                self.loss = nn.PoissonNLLLoss(log_input=True, full=True)
-            else:
-                self.loss = nn.MSELoss()
-
-        def forward(self, x, return_logits=False):
-            if (isinstance(x, list)) or (isinstance(x, tuple)):
-                if isinstance(x[0], str):
-                    x = str_to_one_hot(x)
-                else:
-                    x = x[0]
-            x = x.to(self.device)
-            x = self.trunk(x)
-            x = self.head(x)
-            x = x.mean(1)
-
-            # CRITICAL: Only exponentiate for Poisson loss
-            if (self.loss_type == "poisson") and (not return_logits):
-                x = torch.exp(x)
-            return x
-
-        def training_step(self, batch, batch_idx):
-            x, y = batch
-            logits = self.forward(x, return_logits=True)
-            loss = self.loss(logits, y)
-            self.log("train_loss", loss, logger=True, on_step=False, on_epoch=True, prog_bar=True)
-            return {"loss": loss, "preds": logits.detach(), "targets": y.detach()}
-
-        def validation_step(self, batch, batch_idx):
-            x, y = batch
-            logits = self.forward(x, return_logits=True)
-            loss = self.loss(logits, y)
-            self.log("val_loss", loss, logger=True, on_step=False, on_epoch=True, prog_bar=True)
-            return {"loss": loss, "preds": logits.detach(), "targets": y.detach()}
-
-        def _compute_r2(self, preds, targets):
-            """Compute R² from predictions and targets."""
-            ss_res = ((targets - preds) ** 2).sum()
-            ss_tot = ((targets - targets.mean()) ** 2).sum()
-            return 1 - ss_res / (ss_tot + 1e-8)
-
-        def on_train_epoch_end(self):
-            # Collect all predictions from training outputs
-            if hasattr(self, 'trainer') and self.trainer.train_dataloader:
-                all_preds, all_targets = [], []
-                self.eval()
-                with torch.no_grad():
-                    for batch in self.trainer.train_dataloader:
-                        x, y = batch
-                        x = x.to(self.device)
-                        preds = self.forward(x, return_logits=True)
-                        all_preds.append(preds.cpu())
-                        all_targets.append(y)
-                self.train()
-                if all_preds:
-                    preds = torch.cat(all_preds).flatten()
-                    targets = torch.cat(all_targets).flatten()
-                    r2 = self._compute_r2(preds, targets)
-                    self.log("train_r2", r2, logger=True, prog_bar=True)
-
-        def on_validation_epoch_end(self):
-            # Collect all predictions from validation outputs
-            if hasattr(self, 'trainer') and self.trainer.val_dataloaders:
-                all_preds, all_targets = [], []
-                self.eval()
-                with torch.no_grad():
-                    for batch in self.trainer.val_dataloaders:
-                        x, y = batch
-                        x = x.to(self.device)
-                        preds = self.forward(x, return_logits=True)
-                        all_preds.append(preds.cpu())
-                        all_targets.append(y)
-                if all_preds:
-                    preds = torch.cat(all_preds).flatten()
-                    targets = torch.cat(all_targets).flatten()
-                    r2 = self._compute_r2(preds, targets)
-                    self.log("val_r2", r2, logger=True, prog_bar=True)
-
-        def configure_optimizers(self):
-            return optim.AdamW(self.parameters(), lr=self.lr, weight_decay=0.01)
-
     # Create datasets
-    train_dataset = SeqDataset(train_data)
-    val_dataset = SeqDataset(val_data)
+    train_df = pd.DataFrame(train_data)
+    val_df = pd.DataFrame(val_data)
+    test_df = pd.DataFrame(test_data)
 
-    train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    train_dataset = SeqDataset(train_df[["sequence", "label"]], seq_len=250)
+    val_dataset = SeqDataset(val_df[["sequence", "label"]], seq_len=250)
+    test_dataset = SeqDataset(test_df[["sequence", "label"]], seq_len=250)
 
-    # Initialize model with EXPLICIT loss="mse"
+    # Initialize model with explicit loss="mse"
     # Using smaller architecture for faster training (same as train_oracles.py)
     model = EnformerModel(
         lr=lr,
-        loss="mse",  # CRITICAL: Explicitly set MSE loss
+        loss="mse",
         pretrained=False,
         dim=384,
         depth=4,
         n_downsamples=4,
     )
 
-    # Verify loss type is correct
-    print(f"  Model loss_type: {model.loss_type}")
-    assert model.loss_type == "mse", f"Expected loss_type='mse', got '{model.loss_type}'"
-
-    # Checkpoint callback
+    # Train
     save_dir = Path(f"/checkpoints/{cell}_training")
     save_dir.mkdir(parents=True, exist_ok=True)
+    for old_ckpt in save_dir.rglob("*.ckpt"):
+        old_ckpt.unlink()
 
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=str(save_dir),
-        filename=f"human_paired_{cell.lower()}" + "-{epoch:02d}-{val_loss:.4f}",
-        monitor="val_loss",
-        mode="min",
-        save_top_k=1,
-    )
-
-    # Early stopping to prevent overfitting
-    from pytorch_lightning.callbacks import EarlyStopping
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss",
-        patience=3,  # Stop if no improvement for 3 epochs
-        mode="min",
-        verbose=True,
-    )
-
-    # Trainer
-    trainer = pl.Trainer(
+    model.train_on_dataset(
+        train_dataset,
+        val_dataset,
+        device=0,
+        batch_size=batch_size,
+        num_workers=2,
+        save_dir=str(save_dir),
         max_epochs=epochs,
-        accelerator="gpu",
-        devices=1,
-        logger=CSVLogger(str(save_dir)),
-        callbacks=[checkpoint_callback, early_stop_callback],
-        enable_progress_bar=True,
+        use_cpu=False,
     )
 
-    # Train
-    trainer.fit(model, train_dl, val_dl)
-
-    # Copy best checkpoint to final location
-    best_ckpt = checkpoint_callback.best_model_path
+    # Copy best checkpoint to final location (most recent .ckpt)
+    ckpts = list(save_dir.rglob("*.ckpt"))
+    best_ckpt = None
+    if ckpts:
+        best_ckpt = sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
     # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
     cell_name = cell if cell == "THP1" else cell.lower()
     final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
 
     import shutil
     if best_ckpt:
-        shutil.copy(best_ckpt, final_path)
+        shutil.copy(str(best_ckpt), final_path)
         print(f"\nSaved checkpoint: {final_path}")
         print(f"  loss_type in checkpoint: mse (will NOT exponentiate on inference)")
 
     # Reload best checkpoint for evaluation (model object may be from last epoch, not best)
-    if best_ckpt:
-        print(f"  Reloading best checkpoint for evaluation...")
-        model = EnformerModel.load_from_checkpoint(best_ckpt)
+    if final_path and Path(final_path).exists():
+        print("  Reloading best checkpoint for evaluation...")
+        model = EnformerModel.load_from_checkpoint(final_path)
         model.cuda()
+
+    # Compute validation loss on the reloaded model
+    val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    model.eval()
+    val_preds = []
+    val_targets = []
+    with torch.no_grad():
+        for batch in val_dl:
+            x, y = batch
+            x = x.cuda()
+            pred = model(x, return_logits=True)
+            val_preds.extend(pred.cpu().numpy().flatten().tolist())
+            val_targets.extend(y.numpy().flatten().tolist())
+    val_preds = np.array(val_preds)
+    val_targets = np.array(val_targets)
+    best_val_loss = float(np.mean((val_targets - val_preds) ** 2)) if len(val_targets) else float("nan")
 
     # Evaluate on test set
     print(f"\n  Evaluating on test set ({len(test_data)} samples)...")
-    test_dataset = SeqDataset(test_data)
     test_dl = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     model.eval()
@@ -347,7 +207,7 @@ def train_oracle(
 
     return {
         "cell": cell,
-        "best_val_loss": float(checkpoint_callback.best_model_score),
+        "best_val_loss": best_val_loss,
         "checkpoint_path": final_path,
         "epochs_trained": epochs,
         "loss_type": "mse",

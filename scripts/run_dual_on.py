@@ -49,7 +49,7 @@ from dna_optimizers_multi.base_optimizer import get_fitness_info
 from dna_optimizers_multi.lagrange_optimizer import Lagrange_optimizer
 
 
-def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
+def validate_tfbs_files(data_dir: str, tfbs_dir: str, tfbs_enabled: bool) -> None:
     """
     Validate TFBS files before starting optimization.
 
@@ -61,6 +61,7 @@ def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
         SystemExit: If tfbs_enabled=True and files are invalid
     """
     tfbs_freq_dir = Path(data_dir) / "human_promoters" / "tfbs"
+    motif_dir = Path(tfbs_dir)
 
     # Check for placeholder marker
     marker_path = tfbs_freq_dir / ".PLACEHOLDER_WARNING"
@@ -88,6 +89,15 @@ def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
 
     # Even without marker, check if files exist and have non-zero values
     if tfbs_enabled:
+        meme_path = motif_dir / "20250424153556_JASPAR2024_combined_matrices_735317_meme.txt"
+        ppms_path = motif_dir / "selected_ppms.csv"
+        if not meme_path.exists() or not ppms_path.exists():
+            print("\nERROR: TFBS motif files missing")
+            print(f"Expected MEME file: {meme_path}")
+            print(f"Expected PPM list:  {ppms_path}")
+            print("Run: python scripts/prepare_data.py --download_all")
+            sys.exit(1)
+
         cell_types = ["JURKAT", "K562", "THP1"]
         for cell in cell_types:
             tfbs_path = tfbs_freq_dir / f"{cell}_tfbs_freq_all.csv"
@@ -423,7 +433,7 @@ def main():
     args.out_dir = resolve_path(args.out_dir)
 
     # Validate TFBS files if TFBS optimization is enabled
-    validate_tfbs_files(args.data_dir, args.tfbs)
+    validate_tfbs_files(args.data_dir, args.tfbs_dir, args.tfbs)
 
     # Set seed
     set_seed(args.seed)

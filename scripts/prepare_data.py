@@ -384,6 +384,36 @@ def print_fitness_stats(df: pd.DataFrame):
     print("===================================================\n")
 
 
+def add_splits(df: pd.DataFrame) -> pd.DataFrame:
+    """Add GC-content stratified train/val/test split column (70/10/20)."""
+    if "split" in df.columns:
+        return df
+
+    np.random.seed(97)
+
+    def gc_content(seq):
+        return sum(1 for c in seq if c in "GC") / len(seq)
+
+    df = df.copy()
+    df["GC_bin"] = (np.floor(df["sequence"].apply(gc_content) / 0.05)).astype(int)
+
+    train_idx, val_idx, test_idx = [], [], []
+    for gc_bin in df["GC_bin"].unique():
+        bin_idx = df[df["GC_bin"] == gc_bin].index.tolist()
+        np.random.shuffle(bin_idx)
+        n_train = int(np.ceil(len(bin_idx) * 0.7))
+        n_val = int(np.floor(len(bin_idx) * 0.1))
+        train_idx.extend(bin_idx[:n_train])
+        val_idx.extend(bin_idx[n_train:n_train + n_val])
+        test_idx.extend(bin_idx[n_train + n_val:])
+
+    df.loc[train_idx, "split"] = "train"
+    df.loc[val_idx, "split"] = "val"
+    df.loc[test_idx, "split"] = "test"
+    df.drop(columns=["GC_bin"], inplace=True)
+    return df
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare data for Ctrl-DNA")
     parser.add_argument("--data_dir", type=str, default="./data")
@@ -416,6 +446,8 @@ def main():
             return
         print("Loading existing processed data for TFBS regeneration...")
         df = pd.read_csv(processed_path)
+        df = add_splits(df)
+        df.to_csv(processed_path, index=False)
     else:
         # Step 1: Download MPRA data
         print("Step 1: MPRA Data")
@@ -425,17 +457,22 @@ def main():
         if processed_path.exists():
             print(f"  Loading cached: {processed_path}")
             df = pd.read_csv(processed_path)
+            df = add_splits(df)
+            df.to_csv(processed_path, index=False)
         else:
             df = process_mpra_data(counts_path, seqs_path)
+            df = add_splits(df)
             df.to_csv(processed_path, index=False)
             print(f"  Saved: {processed_path}")
 
-        print_fitness_stats(df)
+        # Use train+val only for normalization stats (avoid test leakage)
+        stats_df = df[df["split"].isin(["train", "val"])]
+        print_fitness_stats(stats_df)
 
         # Step 3: Generate RL initialization data
         print("Step 2: RL Initialization Data")
         rl_data_dir = data_dir / "human_promoters" / "rl_data_large"
-        generate_rl_init_data(df, rl_data_dir)
+        generate_rl_init_data(stats_df, rl_data_dir)
 
     # Step 4: Download JASPAR motifs
     print("\nStep 3: JASPAR Motifs")
