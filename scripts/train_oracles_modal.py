@@ -32,7 +32,7 @@ training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch",
-        "pytorch-lightning",
+        "pytorch-lightning==1.9.5",
         "enformer-pytorch",
         "pandas",
         "numpy",
@@ -231,101 +231,110 @@ def main(
     """Train oracle models on Modal GPU."""
     import pandas as pd
     from pathlib import Path
+    import traceback
 
-    data_path = Path(data_dir)
+    try:
+        print("Modal local_entrypoint starting...")
+        data_path = Path(data_dir).resolve()
+        print(f"Using data_dir: {data_path}")
 
-    # Load processed data
-    processed_path = data_path / "mpra_cache" / "processed_expression.csv"
-    if not processed_path.exists():
-        print(f"Error: {processed_path} not found. Run prepare_data.py first.")
-        return
+        # Load processed data
+        processed_path = data_path / "mpra_cache" / "processed_expression.csv"
+        print(f"Looking for processed data at: {processed_path}")
+        if not processed_path.exists():
+            print(f"Error: {processed_path} not found. Run prepare_data.py first.")
+            return
 
-    print("Loading data...")
-    df = pd.read_csv(processed_path)
+        print("Loading data...")
+        df = pd.read_csv(processed_path)
 
-    # Split into train/val - must match local script exactly (stratify by GC content only)
-    # Note: prepare_data.py doesn't save class labels, so we stratify by GC content only
-    # This is consistent with the data available from processed_expression.csv
-    import numpy as np
-    np.random.seed(97)
+        # Split into train/val - must match local script exactly (stratify by GC content only)
+        # Note: prepare_data.py doesn't save class labels, so we stratify by GC content only
+        # This is consistent with the data available from processed_expression.csv
+        import numpy as np
+        np.random.seed(97)
 
-    def gc_content(seq):
-        return sum(1 for c in seq if c in "GC") / len(seq)
+        def gc_content(seq):
+            return sum(1 for c in seq if c in "GC") / len(seq)
 
-    df["GC_bin"] = (np.floor(df["sequence"].apply(gc_content) / 0.05)).astype(int)
+        df["GC_bin"] = (np.floor(df["sequence"].apply(gc_content) / 0.05)).astype(int)
 
-    train_idx, val_idx, test_idx = [], [], []
-    for gc_bin in df["GC_bin"].unique():
-        bin_idx = df[df["GC_bin"] == gc_bin].index.tolist()
-        np.random.shuffle(bin_idx)
-        # Use 70/10/20 split (train/val/test) to match local script
-        n_train = int(np.ceil(len(bin_idx) * 0.7))
-        n_val = int(np.floor(len(bin_idx) * 0.1))
-        train_idx.extend(bin_idx[:n_train])
-        val_idx.extend(bin_idx[n_train:n_train + n_val])
-        test_idx.extend(bin_idx[n_train + n_val:])
+        train_idx, val_idx, test_idx = [], [], []
+        for gc_bin in df["GC_bin"].unique():
+            bin_idx = df[df["GC_bin"] == gc_bin].index.tolist()
+            np.random.shuffle(bin_idx)
+            # Use 70/10/20 split (train/val/test) to match local script
+            n_train = int(np.ceil(len(bin_idx) * 0.7))
+            n_val = int(np.floor(len(bin_idx) * 0.1))
+            train_idx.extend(bin_idx[:n_train])
+            val_idx.extend(bin_idx[n_train:n_train + n_val])
+            test_idx.extend(bin_idx[n_train + n_val:])
 
-    train_df = df.loc[train_idx]
-    val_df = df.loc[val_idx]
-    test_df = df.loc[test_idx]
+        train_df = df.loc[train_idx]
+        val_df = df.loc[val_idx]
+        test_df = df.loc[test_idx]
 
-    print(f"Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
+        print(f"Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
 
-    # Determine which cells to train
-    cells = ["JURKAT", "K562", "THP1"] if cell == "all" else [cell]
+        # Determine which cells to train
+        cells = ["JURKAT", "K562", "THP1"] if cell == "all" else [cell]
 
-    results = []
-    for c in cells:
-        print(f"\n{'='*50}")
-        print(f"Launching training for {c}...")
-        print(f"{'='*50}")
+        results = []
+        for c in cells:
+            print(f"\n{'='*50}")
+            print(f"Launching training for {c}...")
+            print(f"{'='*50}")
 
-        # Prepare data for this cell type
-        train_data = [
-            {"sequence": row["sequence"], "label": row[c]}
-            for _, row in train_df.iterrows()
-        ]
-        val_data = [
-            {"sequence": row["sequence"], "label": row[c]}
-            for _, row in val_df.iterrows()
-        ]
-        test_data = [
-            {"sequence": row["sequence"], "label": row[c]}
-            for _, row in test_df.iterrows()
-        ]
+            # Prepare data for this cell type
+            train_data = [
+                {"sequence": row["sequence"], "label": row[c]}
+                for _, row in train_df.iterrows()
+            ]
+            val_data = [
+                {"sequence": row["sequence"], "label": row[c]}
+                for _, row in val_df.iterrows()
+            ]
+            test_data = [
+                {"sequence": row["sequence"], "label": row[c]}
+                for _, row in test_df.iterrows()
+            ]
 
-        # Train on Modal
-        result = train_oracle.remote(
-            cell=c,
-            train_data=train_data,
-            val_data=val_data,
-            test_data=test_data,
-            epochs=epochs,
-            batch_size=batch_size,
-            lr=lr,
-        )
-        results.append(result)
+            # Train on Modal
+            result = train_oracle.remote(
+                cell=c,
+                train_data=train_data,
+                val_data=val_data,
+                test_data=test_data,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+            )
+            results.append(result)
 
-    # Print results
-    print("\n" + "="*70)
-    print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY")
-    print("="*70)
-    print(f"\n{'Cell Type':<12} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
-    print("-"*56)
+        # Print results
+        print("\n" + "="*70)
+        print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY")
+        print("="*70)
+        print(f"\n{'Cell Type':<12} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
+        print("-"*56)
 
-    any_warnings = False
-    for r in results:
-        print(f"{r['cell']:<12} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
-        if r['test_spearman_r'] < 0.5:
-            any_warnings = True
+        any_warnings = False
+        for r in results:
+            print(f"{r['cell']:<12} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
+            if r['test_spearman_r'] < 0.5:
+                any_warnings = True
 
-    print("-"*56)
+        print("-"*56)
 
-    if any_warnings:
-        print("\n⚠️  WARNING: One or more oracles have Spearman ρ < 0.5")
-        print("   This indicates weak predictive power. Consider training longer.")
-    else:
-        print("\n✓ All oracles have acceptable predictive power (Spearman ρ ≥ 0.5)")
+        if any_warnings:
+            print("\n⚠️  WARNING: One or more oracles have Spearman ρ < 0.5")
+            print("   This indicates weak predictive power. Consider training longer.")
+        else:
+            print("\n✓ All oracles have acceptable predictive power (Spearman ρ ≥ 0.5)")
 
-    print("\nCheckpoints saved to Modal volume 'ctrl-dna-checkpoints'")
-    print("Download with: modal volume get ctrl-dna-checkpoints human_paired_*.ckpt ./checkpoints/")
+        print("\nCheckpoints saved to Modal volume 'ctrl-dna-checkpoints'")
+        print("Download with: modal volume get ctrl-dna-checkpoints human_paired_*.ckpt ./checkpoints/")
+    except Exception:
+        print("ERROR in local_entrypoint:")
+        traceback.print_exc()
+        raise
