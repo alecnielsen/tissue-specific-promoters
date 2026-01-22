@@ -39,3 +39,14 @@
 ## Open Follow-ups (Optional)
 - Modal training script could optionally write `checkpoints/fitness_ranges.json`
   after training to keep normalization in sync.
+
+## Latest Status (2026-01-22)
+- Modal dry-run succeeded for **JURKAT** (1 epoch) after pinning `pytorch-lightning==1.9.5`.
+  - Test metrics (1 epoch): Spearman ρ ≈ 0.4227, R² ≈ 0.1010 (expectedly weak).
+  - This was a pipeline sanity check, not a full retrain.
+- Root cause of earlier Modal failures: Lightning v2 removed `validation_epoch_end`. Pin fixed this.
+- `scripts/prepare_data.py` now writes a GC-stratified `split` column and uses **train+val only**
+  for RL init + normalization stats to avoid test leakage.
+
+## Action Required
+- **Retrain all 3 oracles** with the fixed pipeline when ready (Modal or local).
