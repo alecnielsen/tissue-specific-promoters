@@ -17,6 +17,7 @@ Data source: https://github.com/anikethjr/promoter_models
 """
 
 import argparse
+import json
 import os
 import sys
 import shlex
@@ -162,6 +163,20 @@ def compute_fitness_stats(df: pd.DataFrame, cell: str) -> tuple[float, float]:
     """Compute min/max fitness values for normalization."""
     values = df[cell].values
     return float(values.min()), float(values.max())
+
+
+def write_fitness_ranges(
+    output_path: Path,
+    cell_stats: dict,
+    seq_len: int,
+) -> None:
+    """Write fitness range overrides used by Ctrl-DNA normalization."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {}
+    for cell, (min_fit, max_fit) in cell_stats.items():
+        payload[cell] = {"length": int(seq_len), "min": float(min_fit), "max": float(max_fit)}
+    output_path.write_text(json.dumps(payload, indent=2))
+    print(f"Fitness ranges written to: {output_path}")
 
 
 def evaluate_oracle(
@@ -372,6 +387,8 @@ def main():
                         help="Directory to save model checkpoints")
     parser.add_argument("--download_only", action="store_true",
                         help="Only download and process data, don't train")
+    parser.add_argument("--write_fitness_ranges", action="store_true",
+                        help="Write checkpoints/fitness_ranges.json for normalization overrides")
     args = parser.parse_args()
 
     # Resolve paths relative to project root
@@ -425,10 +442,16 @@ def main():
 
     # Print fitness statistics
     print("\nFitness statistics (for normalization):")
+    cell_stats = {}
     for cell in ["JURKAT", "K562", "THP1"]:
         all_data = pd.concat([train_df, val_df, test_df])
         min_fit, max_fit = compute_fitness_stats(all_data, cell)
         print(f"  {cell}: min={min_fit:.6f}, max={max_fit:.6f}")
+        cell_stats[cell] = (min_fit, max_fit)
+
+    if args.write_fitness_ranges:
+        seq_len = len(train_df["sequence"].iloc[0]) if len(train_df) else 250
+        write_fitness_ranges(checkpoint_dir / "fitness_ranges.json", cell_stats, seq_len)
 
     # Generate RL initialization data
     rl_data_dir = data_dir / "human_promoters" / "rl_data_large"

@@ -96,7 +96,7 @@ def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
                 print("Run: python scripts/prepare_data.py --download_all")
                 sys.exit(1)
 
-            # Check if file has any non-zero values
+            # Check if file has any non-zero values and is valid
             try:
                 df = pd.read_csv(tfbs_path)
                 # Drop SeqID column and check numeric columns
@@ -104,7 +104,20 @@ def validate_tfbs_files(data_dir: str, tfbs_enabled: bool) -> None:
                 if len(numeric_cols) == 0:
                     print(f"\nERROR: TFBS file has no motif columns: {tfbs_path}")
                     sys.exit(1)
-                total_sum = df[numeric_cols].sum().sum()
+                if df.empty:
+                    print(f"\nERROR: TFBS file is empty: {tfbs_path}")
+                    sys.exit(1)
+
+                # Ensure all motif columns are numeric and finite
+                numeric_df = df[numeric_cols].apply(pd.to_numeric, errors="raise")
+                if not np.isfinite(numeric_df.to_numpy()).all():
+                    print(f"\nERROR: TFBS file contains NaN/inf values: {tfbs_path}")
+                    sys.exit(1)
+                if (numeric_df < 0).any().any():
+                    print(f"\nERROR: TFBS file contains negative counts: {tfbs_path}")
+                    sys.exit(1)
+
+                total_sum = numeric_df.to_numpy().sum()
                 if total_sum == 0:
                     print(f"\nERROR: TFBS file is all zeros: {tfbs_path}")
                     print("This indicates placeholder data. TFBS optimization would be invalid.")

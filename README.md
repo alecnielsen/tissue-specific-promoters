@@ -33,6 +33,11 @@ HyenaDNA (generator) → Candidate sequences → Enformer oracles (per cell type
                   (maximize ON, constrain OFF)
 ```
 
+**Normalization note**: Ctrl-DNA normalizes oracle scores using min/max fitness ranges. After retraining oracles, you can write overrides to `checkpoints/fitness_ranges.json` via:
+```bash
+python scripts/train_oracles.py --cell all --epochs 10 --write_fitness_ranges
+```
+
 ## Dependencies
 
 - [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) (Apache-2.0) - included as submodule

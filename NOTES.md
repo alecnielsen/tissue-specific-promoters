@@ -70,6 +70,17 @@ If this file exists and you run with `--tfbs True`, optimization will fail with 
 1. Install pymemesuite and regenerate: `pip install pymemesuite && python scripts/prepare_data.py`
 2. Run without TFBS: omit `--tfbs` flag (default is False)
 
+**Strict validation** (fast-fail): TFBS CSVs are now validated for non-empty, numeric-only motif columns, finite values (no NaN/inf), and non-negative counts. Any violation halts optimization to avoid silent scientific invalidity.
+
+### Fitness Range Overrides (Normalization)
+
+Ctrl-DNA normalizes oracle scores using min/max fitness ranges. Hardcoded defaults can drift after occasional retraining.
+
+**Override file**: `checkpoints/fitness_ranges.json`
+- Format: `{"JURKAT": {"length": 250, "min": -5.1, "max": 8.2}, ...}`
+- Written by `scripts/train_oracles.py` with `--write_fitness_ranges`
+- Automatically picked up by Ctrl-DNA at runtime if present
+
 ### Recommendations Before Wet Lab
 
 1. **Retrain oracles** with fixed Modal script
