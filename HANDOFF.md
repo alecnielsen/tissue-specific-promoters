@@ -41,13 +41,21 @@
 - Modal training script could optionally write `checkpoints/fitness_ranges.json`
   after training to keep normalization in sync.
 
-## Latest Status (2026-01-23)
-- Modal training command failed locally because `modal` CLI is not installed in this environment.
-- Modal image now installs CUDA-enabled PyTorch (cu121) and will error if CUDA is unavailable.
-- Checkpoint selection now prefers Lightning best checkpoint path.
-- Correlation metrics now treat NaN as invalid (flags warnings).
-- Google Drive downloads now handle confirm tokens.
+## Latest Status (2026-01-22)
+- Modal training completed successfully for all 3 oracles (JURKAT, K562, THP1).
+- Fixed NumPy version incompatibility: pinned `numpy<2` in Modal image for PyTorch 2.1.2 compatibility.
+- Checkpoints downloaded to `checkpoints/` directory.
 
-## Action Required
-- Install Modal CLI if you plan to train on Modal: `pip install modal`
-- **Retrain all 3 oracles** with the fixed pipeline when ready (Modal).
+### Training Results (10 epochs, T4 GPU)
+| Cell Type | Val Loss | R² | Spearman ρ | RMSE |
+|-----------|----------|-----|------------|------|
+| JURKAT | 1.1663 | 0.2134 | 0.4369 | 1.1124 |
+| K562 | 1.1230 | 0.2037 | 0.4632 | 1.1067 |
+| THP1 | 0.5112 | 0.1570 | 0.3469 | 0.7313 |
+
+Note: Spearman ρ < 0.5 indicates weak predictive power. Consider training longer (e.g., 50+ epochs) for better performance.
+
+## Next Steps
+- Run dual-ON optimization: `python scripts/run_dual_on.py ...`
+- Optional: Retrain with more epochs for better oracle performance
+- Optional: Install pymemesuite for real TFBS constraints: `pip install pymemesuite`

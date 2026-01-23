@@ -37,7 +37,7 @@ training_image = (
         "pytorch-lightning==1.9.5",
         "enformer-pytorch",
         "pandas",
-        "numpy",
+        "numpy<2",
         "scipy",
         extra_index_url="https://download.pytorch.org/whl/cu121",
     )
