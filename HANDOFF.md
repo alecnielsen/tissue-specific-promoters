@@ -1,50 +1,25 @@
-# Handoff (2026-01-23)
+# Handoff (2026-01-22)
 
-## Context
-- Goal: tissue-specific promoter design using Ctrl-DNA with dual ON targets (JURKAT + THP1) and K562 OFF.
-- This handoff captures recent fixes for Modal training reliability, checkpoint selection, metric handling, and downloads.
+## Project Goal
+Tissue-specific promoter design using Ctrl-DNA with:
+- **Dual ON targets**: JURKAT + THP1 (high expression)
+- **OFF target**: K562 (low expression)
 
-## Key Changes
-- Modal training image now installs CUDA-enabled PyTorch and fails fast if CUDA is unavailable.
-- Oracle checkpoint selection prefers Lightning's best checkpoint (falls back to latest mtime).
-- Metrics handling now guards against NaN Spearman/Pearson and flags as invalid.
-- Google Drive downloads now handle confirm tokens (fewer HTML error failures).
-- Pinned `pytorch-lightning==1.9.5` in `pyproject.toml` for consistency with Modal.
+## Current Status: READY FOR OPTIMIZATION
 
-## How to Use (Quick)
-- Prepare data: `python scripts/prepare_data.py --download_all`
-- Train oracles on Modal: `modal run scripts/train_oracles_modal.py`
-- Write fitness ranges after retrain (optional but recommended):
-  `python scripts/train_oracles.py --cell all --epochs 10 --write_fitness_ranges`
-- Run dual-ON optimization: `python scripts/run_dual_on.py ...`
+### What's Done
+1. **Environment**: Python 3.11 venv created at `.venv/`
+2. **Data prepared**: MPRA data (17,104 sequences) in `data/mpra_cache/`
+3. **Oracles trained**: All 3 cell types trained on Modal GPU (10 epochs)
+4. **Checkpoints downloaded**: Ready in `checkpoints/`
 
-## Fitness Range Overrides
-- File: `checkpoints/fitness_ranges.json`
-- Auto-loaded by Ctrl-DNA if present.
-- Format example:
-  {"JURKAT": {"length": 250, "min": -5.1, "max": 8.2}, "K562": {...}, "THP1": {...}}
-- You can also set `CTRL_DNA_FITNESS_RANGES` to point to a custom JSON path.
-
-## TFBS Validation (Strict)
-- Optimization will abort if TFBS CSVs are empty, have non-numeric motif columns,
-  contain NaN/inf, or include negative counts.
-- Placeholder detection via `data/human_promoters/tfbs/.PLACEHOLDER_WARNING` remains.
-
-## Files Touched
-- `scripts/prepare_data.py`
-- `scripts/train_oracles.py`
-- `scripts/train_oracles_modal.py`
-- `pyproject.toml`
-- `HANDOFF.md`
-
-## Open Follow-ups (Optional)
-- Modal training script could optionally write `checkpoints/fitness_ranges.json`
-  after training to keep normalization in sync.
-
-## Latest Status (2026-01-22)
-- Modal training completed successfully for all 3 oracles (JURKAT, K562, THP1).
-- Fixed NumPy version incompatibility: pinned `numpy<2` in Modal image for PyTorch 2.1.2 compatibility.
-- Checkpoints downloaded to `checkpoints/` directory.
+### Checkpoints Available
+```
+checkpoints/
+├── human_paired_jurkat.ckpt (87MB)
+├── human_paired_k562.ckpt (87MB)
+└── human_paired_THP1.ckpt (87MB)
+```
 
 ### Training Results (10 epochs, T4 GPU)
 | Cell Type | Val Loss | R² | Spearman ρ | RMSE |
@@ -53,9 +28,71 @@
 | K562 | 1.1230 | 0.2037 | 0.4632 | 1.1067 |
 | THP1 | 0.5112 | 0.1570 | 0.3469 | 0.7313 |
 
-Note: Spearman ρ < 0.5 indicates weak predictive power. Consider training longer (e.g., 50+ epochs) for better performance.
+Note: Spearman ρ < 0.5 = weak predictive power. Usable for initial experiments, but consider retraining with more epochs (50+) for production.
+
+## Environment Setup (if starting fresh)
+```bash
+# Activate existing venv
+source .venv/bin/activate
+
+# Or recreate if needed:
+/opt/homebrew/bin/python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[modal]"
+git submodule update --init --recursive
+```
 
 ## Next Steps
-- Run dual-ON optimization: `python scripts/run_dual_on.py ...`
-- Optional: Retrain with more epochs for better oracle performance
-- Optional: Install pymemesuite for real TFBS constraints: `pip install pymemesuite`
+
+### Option A: Run Dual-ON Optimization (primary goal)
+```bash
+source .venv/bin/activate
+python scripts/run_dual_on.py --help  # Check available options
+# Then run optimization with desired parameters
+```
+
+### Option B: Retrain Oracles with More Epochs (if better performance needed)
+```bash
+source .venv/bin/activate
+python -m modal run scripts/train_oracles_modal.py --epochs 50
+# Then re-download checkpoints:
+cd checkpoints
+python -m modal volume get ctrl-dna-checkpoints human_paired_jurkat.ckpt .
+python -m modal volume get ctrl-dna-checkpoints human_paired_k562.ckpt .
+python -m modal volume get ctrl-dna-checkpoints human_paired_THP1.ckpt .
+```
+
+### Option C: Enable Real TFBS Constraints (optional)
+Current TFBS files are placeholders. For real motif constraints:
+```bash
+pip install pymemesuite
+python scripts/prepare_data.py --tfbs_only
+```
+
+## Key Files
+- `scripts/run_dual_on.py` - Main optimization script
+- `scripts/train_oracles_modal.py` - Modal GPU training
+- `scripts/prepare_data.py` - Data preparation
+- `Ctrl-DNA/` - Git submodule with core Ctrl-DNA code
+
+## Recent Fixes Applied
+- Pinned `numpy<2` in Modal image (PyTorch 2.1.2 compatibility)
+- Pinned `pytorch-lightning==1.9.5`
+- Fixed Google Drive download confirm tokens
+- Added NaN guards for correlation metrics
+- Checkpoint selection prefers Lightning's best checkpoint
+
+## Fitness Range Overrides
+If needed, create `checkpoints/fitness_ranges.json`:
+```json
+{
+  "JURKAT": {"length": 250, "min": -5.57, "max": 8.41},
+  "K562": {"length": 250, "min": -4.09, "max": 8.43},
+  "THP1": {"length": 250, "min": -7.27, "max": 12.49}
+}
+```
+
+## TFBS Validation
+- Optimization aborts if TFBS CSVs are invalid
+- Placeholder marker: `data/human_promoters/tfbs/.PLACEHOLDER_WARNING`
+- Remove this file only after generating real TFBS data
