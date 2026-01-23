@@ -18,12 +18,14 @@ Data source: https://github.com/anikethjr/promoter_models
 
 import argparse
 import json
-import os
 import sys
-import shlex
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import http.cookiejar
+import urllib.request
+import re
+import shutil
 
 # Add Ctrl-DNA to path
 CTRL_DNA_PATH = Path(__file__).parent.parent / "Ctrl-DNA" / "ctrl_dna"
@@ -51,29 +53,65 @@ def validate_download(path: Path, min_size_kb: int = 10) -> bool:
     return True
 
 
+def download_google_drive_file(file_id: str, dest: Path, min_size_kb: int = 10) -> bool:
+    """Download a Google Drive file with confirm-token handling."""
+    if dest.exists():
+        if validate_download(dest, min_size_kb):
+            print(f"  Already exists: {dest}")
+            return True
+        else:
+            print(f"  Existing file is invalid, re-downloading...")
+            dest.unlink()
+
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+    def _stream_to_file(response):
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(response, f)
+
+    try:
+        with opener.open(url) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                html = response.read(200000)
+                token_match = re.search(br"confirm=([0-9A-Za-z_]+)", html)
+                token = token_match.group(1).decode("utf-8") if token_match else None
+                if not token:
+                    for c in cookie_jar:
+                        if c.name.startswith("download_warning"):
+                            token = c.value
+                            break
+                if not token:
+                    print("  Failed to retrieve Google Drive confirm token.")
+                    return False
+                confirm_url = f"{url}&confirm={token}"
+                with opener.open(confirm_url) as confirm_response:
+                    _stream_to_file(confirm_response)
+            else:
+                _stream_to_file(response)
+    except Exception as exc:
+        print(f"  Failed to download Google Drive file: {exc}")
+        return False
+
+    if not validate_download(dest, min_size_kb):
+        print(f"  Download validation failed for {dest}")
+        return False
+    return True
+
+
 def download_data(cache_dir: Path) -> tuple[Path, Path]:
     """Download raw MPRA data from Google Drive."""
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     counts_path = cache_dir / "Raw_Promoter_Counts.csv"
-    if not counts_path.exists() or not validate_download(counts_path, min_size_kb=100):
-        if counts_path.exists():
-            counts_path.unlink()
-        print(f"Downloading Raw_Promoter_Counts.csv to {counts_path}...")
-        cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq' -o {shlex.quote(str(counts_path))}"
-        ret = os.system(cmd)
-        if ret != 0 or not validate_download(counts_path, min_size_kb=100):
-            raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
+    if not download_google_drive_file("15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq", counts_path, min_size_kb=100):
+        raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
 
     seqs_path = cache_dir / "final_list_of_all_promoter_sequences_fixed.tsv"
-    if not seqs_path.exists() or not validate_download(seqs_path, min_size_kb=100):
-        if seqs_path.exists():
-            seqs_path.unlink()
-        print(f"Downloading sequence list to {seqs_path}...")
-        cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG' -o {shlex.quote(str(seqs_path))}"
-        ret = os.system(cmd)
-        if ret != 0 or not validate_download(seqs_path, min_size_kb=100):
-            raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
+    if not download_google_drive_file("1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG", seqs_path, min_size_kb=100):
+        raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
 
     return counts_path, seqs_path
 
@@ -226,9 +264,18 @@ def evaluate_oracle(
     ss_tot = np.sum((targets - np.mean(targets)) ** 2)
     r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
-    # Correlations
+    # Correlations (guard against NaNs from constant predictions)
     spearman_r, spearman_p = stats.spearmanr(predictions, targets)
     pearson_r, pearson_p = stats.pearsonr(predictions, targets)
+    invalid_corr = False
+    if not np.isfinite(spearman_r):
+        spearman_r = 0.0
+        spearman_p = float("nan")
+        invalid_corr = True
+    if not np.isfinite(pearson_r):
+        pearson_r = 0.0
+        pearson_p = float("nan")
+        invalid_corr = True
 
     # Error metrics
     mae = np.mean(np.abs(predictions - targets))
@@ -243,7 +290,24 @@ def evaluate_oracle(
         "mae": mae,
         "rmse": rmse,
         "n_samples": len(targets),
+        "metrics_invalid": invalid_corr,
     }
+
+
+def resolve_best_checkpoint(save_dir: Path, trainer=None) -> Path | None:
+    """Resolve the best checkpoint path, falling back to most recent if needed."""
+    if trainer is not None:
+        checkpoint_cb = getattr(trainer, "checkpoint_callback", None)
+        best_path = getattr(checkpoint_cb, "best_model_path", None)
+        if best_path:
+            best_path = Path(best_path)
+            if best_path.exists():
+                return best_path
+
+    ckpts = list(save_dir.rglob("*.ckpt"))
+    if not ckpts:
+        return None
+    return sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
 
 
 def train_oracle(
@@ -308,15 +372,12 @@ def train_oracle(
     )
 
     # Copy best checkpoint to expected location
-    best_ckpt = list(save_dir.rglob("*.ckpt"))
+    best_ckpt = resolve_best_checkpoint(save_dir, trainer)
     checkpoint_path = None
     if best_ckpt:
-        # Sort by modification time, get most recent (best)
-        best_ckpt = sorted(best_ckpt, key=lambda p: p.stat().st_mtime)[-1]
         # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
         cell_name = cell if cell == "THP1" else cell.lower()
         checkpoint_path = checkpoint_dir / f"human_paired_{cell_name}.ckpt"
-        import shutil
         shutil.copy(best_ckpt, checkpoint_path)
         print(f"  Saved checkpoint: {checkpoint_path}")
 
@@ -341,7 +402,10 @@ def train_oracle(
     print(f"  N samples:       {test_metrics['n_samples']}")
 
     # Warn if correlation is low
-    if test_metrics['spearman_r'] < 0.5:
+    if test_metrics['metrics_invalid']:
+        print(f"\n  ⚠️  WARNING: Invalid correlation metrics (NaN) detected!")
+        print(f"      This oracle may not reliably guide optimization.")
+    elif test_metrics['spearman_r'] < 0.5:
         print(f"\n  ⚠️  WARNING: Spearman ρ < 0.5 indicates weak predictive power!")
         print(f"      This oracle may not reliably guide optimization.")
     elif test_metrics['spearman_r'] < 0.7:
@@ -493,7 +557,7 @@ def main():
     any_warnings = False
     for cell, metrics in all_metrics.items():
         print(f"{cell:<12} {metrics['r2']:>8.4f} {metrics['spearman_r']:>12.4f} {metrics['pearson_r']:>12.4f} {metrics['rmse']:>8.4f}")
-        if metrics['spearman_r'] < 0.5:
+        if metrics['metrics_invalid'] or metrics['spearman_r'] < 0.5:
             any_warnings = True
 
     print("-"*56)

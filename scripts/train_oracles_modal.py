@@ -31,12 +31,15 @@ REPO_ROOT = Path(__file__).parent.parent.resolve()
 training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch",
+        "torch==2.1.2+cu121",
+        "torchvision==0.16.2+cu121",
+        "torchaudio==2.1.2+cu121",
         "pytorch-lightning==1.9.5",
         "enformer-pytorch",
         "pandas",
         "numpy",
         "scipy",
+        extra_index_url="https://download.pytorch.org/whl/cu121",
     )
     .add_local_dir(REPO_ROOT, remote_path="/repo", copy=True)
 )
@@ -77,6 +80,12 @@ def train_oracle(
     sys.path.insert(0, "/repo/Ctrl-DNA/ctrl_dna")
     from src.reglm.regression import EnformerModel, SeqDataset
 
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Ensure the Modal image installs a CUDA-enabled "
+            "PyTorch wheel and that a GPU is attached."
+        )
+
     print(f"\n{'='*50}")
     print(f"Training oracle for {cell}")
     print(f"  Train samples: {len(train_data)}")
@@ -113,7 +122,7 @@ def train_oracle(
     for old_ckpt in save_dir.rglob("*.ckpt"):
         old_ckpt.unlink()
 
-    model.train_on_dataset(
+    trainer = model.train_on_dataset(
         train_dataset,
         val_dataset,
         device=0,
@@ -125,10 +134,17 @@ def train_oracle(
     )
 
     # Copy best checkpoint to final location (most recent .ckpt)
-    ckpts = list(save_dir.rglob("*.ckpt"))
     best_ckpt = None
-    if ckpts:
-        best_ckpt = sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
+    checkpoint_cb = getattr(trainer, "checkpoint_callback", None)
+    best_path = getattr(checkpoint_cb, "best_model_path", None)
+    if best_path:
+        best_path = Path(best_path)
+        if best_path.exists():
+            best_ckpt = best_path
+    if best_ckpt is None:
+        ckpts = list(save_dir.rglob("*.ckpt"))
+        if ckpts:
+            best_ckpt = sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
     # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
     cell_name = cell if cell == "THP1" else cell.lower()
     final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
@@ -189,6 +205,15 @@ def train_oracle(
 
     spearman_r, spearman_p = stats.spearmanr(predictions, targets)
     pearson_r, pearson_p = stats.pearsonr(predictions, targets)
+    invalid_corr = False
+    if not np.isfinite(spearman_r):
+        spearman_r = 0.0
+        spearman_p = float("nan")
+        invalid_corr = True
+    if not np.isfinite(pearson_r):
+        pearson_r = 0.0
+        pearson_p = float("nan")
+        invalid_corr = True
     mae = np.mean(np.abs(predictions - targets))
     rmse = np.sqrt(np.mean((predictions - targets) ** 2))
 
@@ -199,7 +224,9 @@ def train_oracle(
     print(f"  MAE:             {mae:.4f}")
     print(f"  RMSE:            {rmse:.4f}")
 
-    if spearman_r < 0.5:
+    if invalid_corr:
+        print(f"\n  ⚠️  WARNING: Invalid correlation metrics (NaN) detected!")
+    elif spearman_r < 0.5:
         print(f"\n  ⚠️  WARNING: Spearman ρ < 0.5 indicates weak predictive power!")
 
     # Commit volume changes
@@ -217,6 +244,7 @@ def train_oracle(
         "test_mae": mae,
         "test_rmse": rmse,
         "test_n_samples": len(test_data),
+        "metrics_invalid": invalid_corr,
     }
 
 
@@ -321,7 +349,7 @@ def main(
         any_warnings = False
         for r in results:
             print(f"{r['cell']:<12} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
-            if r['test_spearman_r'] < 0.5:
+            if r.get("metrics_invalid") or r['test_spearman_r'] < 0.5:
                 any_warnings = True
 
         print("-"*56)

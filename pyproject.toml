@@ -7,7 +7,7 @@ dependencies = [
     "numpy",
     "pandas",
     "torch",
-    "pytorch-lightning",
+    "pytorch-lightning==1.9.5",
     "enformer-pytorch",
     "scipy",
     "scikit-learn",

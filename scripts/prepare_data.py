@@ -15,12 +15,15 @@ Usage:
 
 import argparse
 import os
-import sys
 import shlex
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Optional
+import http.cookiejar
+import urllib.request
+import re
+import shutil
 
 # Constants
 CELL_TYPES = ["JURKAT", "K562", "THP1"]
@@ -83,29 +86,65 @@ def download_file(url: str, dest: Path, min_size_kb: int = 10) -> bool:
     return True
 
 
+def download_google_drive_file(file_id: str, dest: Path, min_size_kb: int = 10) -> bool:
+    """Download a Google Drive file with confirm-token handling."""
+    if dest.exists():
+        if validate_download(dest, min_size_kb):
+            print(f"  Already exists: {dest}")
+            return True
+        else:
+            print(f"  Existing file is invalid, re-downloading...")
+            dest.unlink()
+
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+    def _stream_to_file(response):
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(response, f)
+
+    try:
+        with opener.open(url) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                html = response.read(200000)
+                token_match = re.search(br"confirm=([0-9A-Za-z_]+)", html)
+                token = token_match.group(1).decode("utf-8") if token_match else None
+                if not token:
+                    for c in cookie_jar:
+                        if c.name.startswith("download_warning"):
+                            token = c.value
+                            break
+                if not token:
+                    print("  Failed to retrieve Google Drive confirm token.")
+                    return False
+                confirm_url = f"{url}&confirm={token}"
+                with opener.open(confirm_url) as confirm_response:
+                    _stream_to_file(confirm_response)
+            else:
+                _stream_to_file(response)
+    except Exception as exc:
+        print(f"  Failed to download Google Drive file: {exc}")
+        return False
+
+    if not validate_download(dest, min_size_kb):
+        print(f"  Download validation failed for {dest}")
+        return False
+    return True
+
+
 def download_mpra_data(cache_dir: Path) -> tuple[Path, Path]:
     """Download raw MPRA data from Google Drive."""
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     counts_path = cache_dir / "Raw_Promoter_Counts.csv"
-    if not counts_path.exists() or not validate_download(counts_path, min_size_kb=100):
-        if counts_path.exists():
-            counts_path.unlink()
-        print("Downloading Raw_Promoter_Counts.csv...")
-        cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq' -o {shlex.quote(str(counts_path))}"
-        ret = os.system(cmd)
-        if ret != 0 or not validate_download(counts_path, min_size_kb=100):
-            raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
+    if not download_google_drive_file("15p6GhDop5BsUPryZ6pfKgwJ2XEVHRAYq", counts_path, min_size_kb=100):
+        raise RuntimeError(f"Failed to download {counts_path}. Check Google Drive quota or network.")
 
     seqs_path = cache_dir / "final_list_of_all_promoter_sequences_fixed.tsv"
-    if not seqs_path.exists() or not validate_download(seqs_path, min_size_kb=100):
-        if seqs_path.exists():
-            seqs_path.unlink()
-        print("Downloading sequence list...")
-        cmd = f"curl -L 'https://drive.google.com/uc?export=download&id=1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG' -o {shlex.quote(str(seqs_path))}"
-        ret = os.system(cmd)
-        if ret != 0 or not validate_download(seqs_path, min_size_kb=100):
-            raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
+    if not download_google_drive_file("1kTfsZvsCz7EWUhl-UZgK0B31LtxJH4qG", seqs_path, min_size_kb=100):
+        raise RuntimeError(f"Failed to download {seqs_path}. Check Google Drive quota or network.")
 
     return counts_path, seqs_path
 
