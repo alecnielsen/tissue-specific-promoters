@@ -37,7 +37,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 # Add Ctrl-DNA to path
 CTRL_DNA_PATH = PROJECT_ROOT / "Ctrl-DNA" / "ctrl_dna"
+CTRL_DNA_ROOT = PROJECT_ROOT / "Ctrl-DNA"
 sys.path.insert(0, str(CTRL_DNA_PATH))
+sys.path.insert(0, str(CTRL_DNA_ROOT))  # For scripts.utils, scripts.motifs
 os.chdir(CTRL_DNA_PATH)
 
 import torch

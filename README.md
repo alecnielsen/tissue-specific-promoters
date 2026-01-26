@@ -38,7 +38,11 @@ For full context and mitigations, see [NOTES.md](NOTES.md).
 2. **Train oracles** (Modal GPU or local): `modal run scripts/train_oracles_modal.py` or `python scripts/train_oracles.py --cell all --epochs 10`
 3. **Quality gate**: Check Spearman ρ in `checkpoints/oracle_test_metrics.csv` (≥ 0.5).
 4. **Write fitness ranges** (recommended after retrain): `python scripts/train_oracles.py --cell all --epochs 10 --write_fitness_ranges`
-5. **Run optimization**: `python scripts/run_dual_on.py --epoch 5 --max_iter 100 ...`
+5. **Run optimization** (Modal GPU recommended):
+   ```bash
+   modal run scripts/run_dual_on_modal.py --max-iter 100 --epochs 5
+   modal volume get ctrl-dna-results . ./results/
+   ```
 6. **Analyze top sequences** and **validate experimentally** (including HEK293).
 
 ### Future Phases
