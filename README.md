@@ -2,11 +2,26 @@
 
 Design promoters that are **active in immune cells** (T-cells, macrophages) and **inactive in non-immune cells** (HEK293).
 
+## Results (2026-02-03)
+
+First full optimization completed:
+- **25,600 sequences** evaluated over 100 RL iterations
+- **Top reward**: 0.4499 (combined objective)
+- **Tissue specificity**: ~2.5x higher expression in JURKAT vs HEK293
+
+| Metric | Top 10 Average |
+|--------|----------------|
+| JURKAT (ON) | 0.50 |
+| THP1 (ON) | 0.39 |
+| HEK293 (OFF) | 0.21 |
+
+Top candidates saved in `results/dual_on_hek293_20260203_215622/top_100_sequences.csv`.
+
 ## Approach
 
 Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforcement learning for cell-type-specific promoter design.
 
-### Phase 1 (Current)
+### Phase 1 (Complete)
 
 | Cell Line | Type | Objective | Source | Status |
 |-----------|------|-----------|--------|--------|

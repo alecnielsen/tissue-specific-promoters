@@ -5,7 +5,17 @@ Tissue-specific promoter design using Ctrl-DNA with:
 - **Dual ON targets**: JURKAT + THP1 (high expression in T-cells and macrophages)
 - **OFF target**: HEK293 (low expression in epithelial cells)
 
-## Current Status: READY FOR FULL OPTIMIZATION
+## Current Status: FIRST FULL OPTIMIZATION COMPLETE ✅
+
+### Results Summary
+Full optimization run completed (100 iterations, 5 epochs):
+- **Total sequences evaluated**: 25,600
+- **Top reward**: 0.4499
+- **Top 10 avg JURKAT (ON)**: 0.50
+- **Top 10 avg THP1 (ON)**: 0.39
+- **Top 10 avg HEK293 (OFF)**: 0.21
+
+Results saved to: `results/dual_on_hek293_20260203_215622/`
 
 ### What's Done
 1. **Environment**: Python 3.11 venv at `.venv/`
@@ -16,6 +26,7 @@ Tissue-specific promoter design using Ctrl-DNA with:
 4. **PARM HEK293 integrated**: Pretrained model as OFF target (replaces K562)
 5. **New optimization script**: `scripts/run_dual_on_hek293_modal.py`
 6. **Test run completed**: PARM integration working end-to-end
+7. **Full optimization completed**: 100 iterations, 25,600 sequences evaluated
 
 ### Oracle Quality Summary
 
@@ -39,19 +50,38 @@ Tissue-specific promoter design using Ctrl-DNA with:
 
 ---
 
-## Next Step: Run Full Optimization
+## Optimization Results (2026-02-03)
 
-Both oracles now pass quality gates. The pipeline is ready.
+### Top Candidates
 
-```bash
-# Full optimization run (100 iterations)
-modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+| Rank | JURKAT (ON) | THP1 (ON) | HEK293 (OFF) | Reward |
+|------|-------------|-----------|--------------|--------|
+| 1 | 0.512 | 0.386 | 0.209 | 0.450 |
+| 2 | 0.541 | 0.422 | 0.236 | 0.450 |
+| 3 | 0.504 | 0.385 | 0.211 | 0.445 |
+| 4 | 0.495 | 0.379 | 0.206 | 0.444 |
+| 5 | 0.507 | 0.390 | 0.216 | 0.443 |
 
-# Download results
-modal volume get ctrl-dna-results . ./results/
-```
+**Observations**:
+- Good tissue specificity: ~2.5x higher expression in JURKAT vs HEK293
+- THP1 expression is moderate (ensemble oracle may be conservative)
+- Top sequences are GC-rich with typical promoter motifs
 
-The THP1 ensemble (5 models) is used via `scripts/evaluate_ensemble.py` for inference.
+### Output Files
+- `results/dual_on_hek293_20260203_215622/top_100_sequences.csv` — Best candidates for validation
+- `results/dual_on_hek293_20260203_215622/all_sequences.csv` — Full 25,600 sequence dataset
+- `results/dual_on_hek293_20260203_215622/summary.json` — Run config and metrics
+
+---
+
+## Next Steps
+
+1. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
+2. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
+3. **Improve JURKAT oracle**: Train 5-model ensemble (same approach as THP1)
+4. **Re-run optimization**: With improved oracles
+5. **Add B-cell oracle**: From SynBP data
+6. **Swap generator**: HyenaDNA → Evo 2
 
 ---
 

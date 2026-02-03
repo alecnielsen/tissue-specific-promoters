@@ -190,9 +190,31 @@ Key insight: Random seed significantly affects model quality. Ensemble averaging
 - [x] ~~Run test optimization on Modal GPU~~
 - [x] ~~Integrate PARM HEK293 as OFF target~~
 - [x] ~~Improve THP1 oracle~~ (ensemble ρ=0.89)
-- [ ] **Run full optimization** (100 iterations, 5 epochs) ← **START HERE**
+- [x] ~~Run full optimization~~ (100 iterations, 5 epochs) ✅ **COMPLETE**
 - [ ] Analyze top sequences for cell-type specificity
 - [ ] Experimental validation in cell lines
+
+### Full Optimization Results (2026-02-03)
+
+**Run configuration**: 100 iterations, 5 epochs, batch_size=256, lr=0.0001
+
+| Metric | Value |
+|--------|-------|
+| Total sequences | 25,600 |
+| Top reward | 0.4499 |
+| Top 10 avg JURKAT | 0.50 |
+| Top 10 avg THP1 | 0.39 |
+| Top 10 avg HEK293 | 0.21 |
+
+**Output files**: `results/dual_on_hek293_20260203_215622/`
+- `top_100_sequences.csv` — Best candidates for experimental validation
+- `all_sequences.csv` — Full dataset (25,600 sequences)
+- `summary.json` — Run configuration and metrics
+
+**Observations**:
+- Good tissue specificity achieved (~2.5x JURKAT/HEK293 ratio)
+- THP1 predictions are moderate; ensemble oracle may be conservative
+- Top sequences are GC-rich with typical promoter motifs (CpG islands, GGG repeats)
 
 ---
 
@@ -468,49 +490,47 @@ Review artifacts:
 2. ~~**Run Data Prep**: `python scripts/prepare_data.py --download_all`~~ ✅ Done
 3. ~~**Train Oracles**: `modal run scripts/train_oracles_modal.py`~~ ✅ Done (Spearman ρ ~0.4-0.5)
 4. ~~**Test Optimization**: Verified pipeline on Modal A10G~~ ✅ Done (2026-01-26)
-5. **Run Full Optimization**: 100 iterations, 5 epochs ← **START HERE**
-6. **Analyze Results**: Check top sequences for cell-type specificity
-7. **Improve Oracles**: If results are poor, retrain with better architecture
+5. ~~**Run Full Optimization**: 100 iterations, 5 epochs~~ ✅ Done (2026-02-03)
+6. **Analyze Results**: Check top sequences for cell-type specificity ← **START HERE**
+7. **Improve Oracles**: Train JURKAT ensemble (same approach as THP1)
 8. **Experimental Validation**: Test in JURKAT, THP1, and HEK293
 
-### Step 5: Run Full Optimization
+### Step 5: Run Full Optimization ✅ COMPLETE
 
-The optimization pipeline is working with HEK293 (PARM) as OFF target. Run a full optimization:
+First full optimization completed 2026-02-03:
+- 100 iterations, 5 epochs on Modal A10G
+- 25,600 sequences evaluated
+- Top reward: 0.4499
+- Results: `results/dual_on_hek293_20260203_215622/`
 
+To run another optimization:
 ```bash
-cd /Users/alec/kernel/tissue-specific-promoters
-
-# Full run on Modal (~$5-15, A10G GPU)
-modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
-
-# Download results when done
-modal volume get ctrl-dna-results . ./results/
+modal run --detach scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+modal volume get ctrl-dna-results dual_on_hek293_YYYYMMDD_HHMMSS ./results/
 ```
-
-Results are saved to Modal volume `ctrl-dna-results` with:
-- `all_sequences.csv` - All evaluated sequences with scores
-- `top_100_sequences.csv` - Top 100 by reward
-- `summary.json` - Run configuration and metrics
 
 ### Step 6: Analyze Results
 
-After optimization, analyze the top sequences:
-- **Specificity ratio**: JURKAT/K562 and THP1/K562 ratios
+Analyze the top sequences from `results/dual_on_hek293_20260203_215622/top_100_sequences.csv`:
+- **Specificity ratio**: JURKAT/HEK293 and THP1/HEK293 ratios
 - **Motif analysis**: TFBS enrichment in top sequences
 - **Sequence diversity**: Check for convergence/collapse
+- **GC content**: Distribution of nucleotide composition
 
-### Step 7: Oracle Improvements ✅ Complete
+### Step 7: Oracle Improvements
 
-Both oracles now pass quality gates:
-- JURKAT: ρ=0.50 (single model)
-- THP1: ρ=0.89 (5-model ensemble)
+Current oracle quality:
+- JURKAT: ρ=0.50 (single model) — passes gate but could be improved
+- THP1: ρ=0.89 (5-model ensemble) ✅ Excellent
 
-The THP1 ensemble was trained using:
+**Recommended**: Train JURKAT ensemble using same approach as THP1:
 ```bash
-# Train 5 models with different seeds
+# Train 5 JURKAT models with different seeds
 for i in 1 2 3 4 5; do
-  modal run scripts/train_oracles_modal.py --cell THP1 --epochs 50 --seed $i --ensemble-id $i
+  modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 50 --seed $i --ensemble-id $i
 done
 ```
+
+This could push JURKAT oracle from ρ=0.50 to ρ=0.7+ (based on THP1 improvement from ρ=0.39 to ρ=0.89).
 
 Ensemble inference via `scripts/evaluate_ensemble.py`.

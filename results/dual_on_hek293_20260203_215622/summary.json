@@ -1,0 +1,21 @@
+{
+  "timestamp": "20260203_215622",
+  "config": {
+    "max_iter": 100,
+    "epochs": 5,
+    "batch_size": 256,
+    "lr": 0.0001,
+    "on_weight": 0.4,
+    "off_constraint": 0.3,
+    "seed": 0,
+    "off_target": "HEK293_PARM"
+  },
+  "results": {
+    "total_sequences": 25600,
+    "top_reward": 0.4499255393825793,
+    "top_10_avg_reward": 0.44223189831141785,
+    "top_10_avg_jurkat": 0.5003849955271032,
+    "top_10_avg_thp1": 0.3902125053202799,
+    "top_10_avg_hek293": 0.21400710202753545
+  }
+}
