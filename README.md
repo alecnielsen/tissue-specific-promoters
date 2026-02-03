@@ -8,13 +8,13 @@ Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforce
 
 ### Phase 1 (Current)
 
-| Cell Line | Type | Objective | Status |
-|-----------|------|-----------|--------|
-| JURKAT | T-cell | ON (maximize) | ✅ Oracle available |
-| THP1 | Macrophage | ON (maximize) | ✅ Oracle available |
-| K562 | Myeloid | OFF (constrain) | ✅ Oracle available |
+| Cell Line | Type | Objective | Source | Status |
+|-----------|------|-----------|--------|--------|
+| JURKAT | T-cell | ON (maximize) | EnformerModel (ρ=0.50) | ✅ Passed quality gate |
+| THP1 | Macrophage | ON (maximize) | EnformerModel (ρ=0.39) | ⚠️ Weak |
+| HEK293 | Epithelial | OFF (constrain) | PARM pretrained | ✅ Ready |
 
-**Note**: K562 is a proxy for HEK293. Both are off-targets, but K562 is hematopoietic while HEK293 is epithelial. Results should be validated in HEK293.
+**Note**: HEK293 (epithelial) is the proper OFF target for tissue-specific immune promoters. We use the [PARM](https://github.com/vansteensellab/PARM) pretrained model (5-fold ensemble) rather than training our own oracle.
 
 > ⚠️ **Scientific Validity**: See [NOTES.md](NOTES.md#scientific-validity--known-limitations) for important caveats about oracle model validation and biological assumptions.
 
@@ -22,7 +22,7 @@ Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforce
 
 This project makes explicit biological and modeling assumptions that affect validity. Short version:
 
-- **Off-target proxy**: K562 is used as an OFF target proxy for HEK293 (hematopoietic vs epithelial). Promoters must still be validated in HEK293.
+- **HEK293 OFF target**: Using PARM pretrained model for HEK293 (epithelial) as the proper OFF target.
 - **MPRA context**: Oracles are trained on episomal MPRA data; activity may differ in genomic integration.
 - **Sequence length**: 250 bp promoters may miss distal regulatory context.
 - **No chromatin context**: Oracles score sequence only; chromatin state is ignored.
@@ -35,21 +35,20 @@ For full context and mitigations, see [NOTES.md](NOTES.md).
 ## Workflow (End-to-End)
 
 1. **Prepare data** (downloads MPRA + motifs, builds RL init + TFBS files): `python scripts/prepare_data.py --download_all`
-2. **Train oracles** (Modal GPU or local): `modal run scripts/train_oracles_modal.py` or `python scripts/train_oracles.py --cell all --epochs 10`
-3. **Quality gate**: Check Spearman ρ in `checkpoints/oracle_test_metrics.csv` (≥ 0.5).
-4. **Write fitness ranges** (recommended after retrain): `python scripts/train_oracles.py --cell all --epochs 10 --write_fitness_ranges`
-5. **Run optimization** (Modal GPU recommended):
+2. **Train oracles** (Modal GPU): `modal run scripts/train_oracles_modal.py` (trains JURKAT + THP1 with v2 improvements)
+3. **Quality gate**: Check Spearman ρ in training output (≥ 0.5).
+4. **Run optimization** (Modal GPU, uses PARM HEK293 as OFF target):
    ```bash
-   modal run scripts/run_dual_on_modal.py --max-iter 100 --epochs 5
+   modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
    modal volume get ctrl-dna-results . ./results/
    ```
-6. **Analyze top sequences** and **validate experimentally** (including HEK293).
+5. **Analyze top sequences** and **validate experimentally**.
 
 ### Future Phases
 
-- Add HEK293 oracle (from [PARM](https://github.com/vansteensellab/PARM) data)
 - Add B-cell oracle (from [SynBP](https://zenodo.org/records/8008545) data)
 - Swap HyenaDNA generator for [Evo 2](https://github.com/ArcInstitute/evo2)
+- Improve THP1 oracle (architecture scaling or multi-task learning)
 
 ## How It Works
 

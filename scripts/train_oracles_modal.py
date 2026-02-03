@@ -1,17 +1,23 @@
 """
-Train Ctrl-DNA oracle models on Modal GPU.
+Train Ctrl-DNA oracle models on Modal GPU with improved training.
 
 Usage:
-    # Train all oracles
-    modal run scripts/train_oracles_modal.py
+    # Train all oracles with 50 epochs + early stopping
+    modal run scripts/train_oracles_modal.py --epochs 50
 
     # Train single cell type
-    modal run scripts/train_oracles_modal.py --cell JURKAT
+    modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 50
 
-    # Quick test (1 epoch)
-    modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 1
+    # Quick test (5 epochs)
+    modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 5
 
-Cost estimate: ~$2-5 total for all 3 oracles (T4 GPU)
+Cost estimate: ~$5-15 total for all 3 oracles (T4 GPU, 50 epochs with early stopping)
+
+Training improvements (v2):
+- Early stopping (patience=7) to prevent overfitting
+- LR scheduling (ReduceLROnPlateau) for better convergence
+- Reverse complement augmentation (doubles effective data)
+- Gradient clipping for stability
 
 IMPORTANT: This script uses the SAME EnformerModel class as inference
 (from Ctrl-DNA/ctrl_dna/src/reglm/regression.py) with loss="mse" to ensure
@@ -58,19 +64,30 @@ def train_oracle(
     train_data: list[dict],
     val_data: list[dict],
     test_data: list[dict],
-    epochs: int = 10,
+    epochs: int = 50,
     batch_size: int = 128,
     lr: float = 1e-4,
+    patience: int = 7,
+    use_augmentation: bool = True,
 ) -> dict:
     """
     Train EnformerModel oracle for a single cell type on GPU.
+
+    Improvements over v1:
+    - Early stopping (patience=7) to prevent overfitting
+    - LR scheduling (ReduceLROnPlateau) for better convergence
+    - Reverse complement augmentation (doubles effective data)
+    - Gradient clipping for stability
 
     CRITICAL: Uses the SAME EnformerModel class signature as regression.py
     with loss="mse" explicitly set. This ensures checkpoint compatibility
     at inference time (base_optimizer.py loads with regression.EnformerModel).
     """
     import torch
-    from torch.utils.data import DataLoader
+    from torch.utils.data import DataLoader, Dataset
+    import pytorch_lightning as pl
+    from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+    from pytorch_lightning.loggers import CSVLogger
     import numpy as np
     from pathlib import Path
     import pandas as pd
@@ -86,28 +103,80 @@ def train_oracle(
             "PyTorch wheel and that a GPU is attached."
         )
 
-    print(f"\n{'='*50}")
-    print(f"Training oracle for {cell}")
-    print(f"  Train samples: {len(train_data)}")
+    # Reverse complement augmentation dataset wrapper
+    class AugmentedSeqDataset(Dataset):
+        """Wraps SeqDataset with reverse complement augmentation."""
+
+        COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+
+        def __init__(self, base_dataset: SeqDataset, augment: bool = True):
+            self.base = base_dataset
+            self.augment = augment
+
+        def __len__(self):
+            return len(self.base) * 2 if self.augment else len(self.base)
+
+        def __getitem__(self, idx):
+            if not self.augment or idx < len(self.base):
+                return self.base[idx]
+
+            # Get original data
+            orig_idx = idx - len(self.base)
+            seq_tensor, label = self.base[orig_idx]
+
+            # Reverse complement: flip both dimensions
+            # seq_tensor is (L, 4) one-hot: A=0, C=1, G=2, T=3
+            # RC swaps A<->T, C<->G and reverses
+            rc_tensor = torch.flip(seq_tensor, dims=[0, 1])
+
+            return rc_tensor, label
+
+    # Custom model with LR scheduling
+    class EnformerModelWithScheduler(EnformerModel):
+        """EnformerModel with ReduceLROnPlateau scheduler."""
+
+        def configure_optimizers(self):
+            optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=3, verbose=True, min_lr=1e-6
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": "val_loss",
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+            }
+
+    aug_status = "ON (2x data)" if use_augmentation else "OFF"
+    print(f"\n{'='*60}")
+    print(f"Training oracle for {cell} (v2 with improvements)")
+    print(f"  Train samples: {len(train_data)} (x2 with augmentation = {len(train_data) * 2})")
     print(f"  Val samples: {len(val_data)}")
-    print(f"  Epochs: {epochs}")
+    print(f"  Max epochs: {epochs}")
+    print(f"  Early stopping patience: {patience}")
     print(f"  Batch size: {batch_size}")
+    print(f"  Initial LR: {lr}")
+    print(f"  LR scheduling: ReduceLROnPlateau (factor=0.5, patience=3)")
+    print(f"  Reverse complement augmentation: {aug_status}")
     print(f"  GPU: {torch.cuda.get_device_name(0)}")
     print(f"  Loss type: MSE (explicitly set for checkpoint compatibility)")
-    print(f"{'='*50}\n")
+    print(f"{'='*60}\n")
 
     # Create datasets
     train_df = pd.DataFrame(train_data)
     val_df = pd.DataFrame(val_data)
     test_df = pd.DataFrame(test_data)
 
-    train_dataset = SeqDataset(train_df[["sequence", "label"]], seq_len=250)
+    base_train_dataset = SeqDataset(train_df[["sequence", "label"]], seq_len=250)
+    train_dataset = AugmentedSeqDataset(base_train_dataset, augment=use_augmentation)
     val_dataset = SeqDataset(val_df[["sequence", "label"]], seq_len=250)
     test_dataset = SeqDataset(test_df[["sequence", "label"]], seq_len=250)
 
-    # Initialize model with explicit loss="mse"
-    # Using smaller architecture for faster training (same as train_oracles.py)
-    model = EnformerModel(
+    # Initialize model with scheduler
+    model = EnformerModelWithScheduler(
         lr=lr,
         loss="mse",
         pretrained=False,
@@ -116,35 +185,67 @@ def train_oracle(
         n_downsamples=4,
     )
 
-    # Train
+    # Setup training directory
     save_dir = Path(f"/checkpoints/{cell}_training")
     save_dir.mkdir(parents=True, exist_ok=True)
     for old_ckpt in save_dir.rglob("*.ckpt"):
         old_ckpt.unlink()
 
-    trainer = model.train_on_dataset(
+    # Create dataloaders
+    train_dl = DataLoader(
         train_dataset,
-        val_dataset,
-        device=0,
         batch_size=batch_size,
+        shuffle=True,
         num_workers=2,
-        save_dir=str(save_dir),
-        max_epochs=epochs,
-        use_cpu=False,
+    )
+    val_dl = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
     )
 
-    # Copy best checkpoint to final location (most recent .ckpt)
-    best_ckpt = None
-    checkpoint_cb = getattr(trainer, "checkpoint_callback", None)
-    best_path = getattr(checkpoint_cb, "best_model_path", None)
-    if best_path:
-        best_path = Path(best_path)
-        if best_path.exists():
-            best_ckpt = best_path
-    if best_ckpt is None:
+    # Setup callbacks
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=save_dir,
+        monitor="val_loss",
+        mode="min",
+        save_top_k=1,
+        filename="best-{epoch:02d}-{val_loss:.4f}",
+    )
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        patience=patience,
+        mode="min",
+        verbose=True,
+    )
+    lr_monitor = LearningRateMonitor(logging_interval="epoch")
+
+    # Create trainer with all improvements
+    torch.set_float32_matmul_precision("medium")
+    trainer = pl.Trainer(
+        max_epochs=epochs,
+        accelerator="gpu",
+        devices=[0],
+        logger=CSVLogger(str(save_dir)),
+        callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
+        gradient_clip_val=1.0,  # Gradient clipping for stability
+        enable_progress_bar=True,
+    )
+
+    # Train
+    trainer.fit(model=model, train_dataloaders=train_dl, val_dataloaders=val_dl)
+
+    print(f"\n  Training stopped at epoch {trainer.current_epoch}")
+    print(f"  Best val_loss: {checkpoint_callback.best_model_score:.4f}")
+
+    # Copy best checkpoint to final location
+    best_ckpt = checkpoint_callback.best_model_path
+    if not best_ckpt or not Path(best_ckpt).exists():
         ckpts = list(save_dir.rglob("*.ckpt"))
         if ckpts:
-            best_ckpt = sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
+            best_ckpt = str(sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1])
+
     # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
     cell_name = cell if cell == "THP1" else cell.lower()
     final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
@@ -160,6 +261,9 @@ def train_oracle(
         print("  Reloading best checkpoint for evaluation...")
         model = EnformerModel.load_from_checkpoint(final_path)
         model.cuda()
+
+    # PyTorch Lightning's current_epoch is 0-indexed and may overshoot at end of training
+    epochs_trained = min(trainer.current_epoch + 1, epochs)
 
     # Compute validation loss on the reloaded model
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
@@ -236,7 +340,9 @@ def train_oracle(
         "cell": cell,
         "best_val_loss": best_val_loss,
         "checkpoint_path": final_path,
-        "epochs_trained": epochs,
+        "epochs_trained": epochs_trained,
+        "max_epochs": epochs,
+        "early_stopped": epochs_trained < epochs,
         "loss_type": "mse",
         "test_r2": r2,
         "test_spearman_r": spearman_r,
@@ -251,12 +357,14 @@ def train_oracle(
 @app.local_entrypoint()
 def main(
     cell: str = "all",
-    epochs: int = 10,
+    epochs: int = 50,
     batch_size: int = 128,
     lr: float = 1e-4,
+    patience: int = 7,
+    no_augmentation: bool = False,
     data_dir: str = "./data",
 ):
-    """Train oracle models on Modal GPU."""
+    """Train oracle models on Modal GPU with improved training."""
     import pandas as pd
     from pathlib import Path
     import traceback
@@ -336,23 +444,29 @@ def main(
                 epochs=epochs,
                 batch_size=batch_size,
                 lr=lr,
+                patience=patience,
+                use_augmentation=not no_augmentation,
             )
             results.append(result)
 
         # Print results
-        print("\n" + "="*70)
-        print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY")
-        print("="*70)
-        print(f"\n{'Cell Type':<12} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
-        print("-"*56)
+        print("\n" + "="*80)
+        print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY (v2 with improvements)")
+        print("="*80)
+        print(f"\n{'Cell Type':<12} {'Epochs':>8} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
+        print("-"*66)
 
         any_warnings = False
         for r in results:
-            print(f"{r['cell']:<12} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
+            epoch_str = f"{r['epochs_trained']}/{r['max_epochs']}"
+            if r.get('early_stopped'):
+                epoch_str += "*"  # Mark early stopped
+            print(f"{r['cell']:<12} {epoch_str:>8} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
             if r.get("metrics_invalid") or r['test_spearman_r'] < 0.5:
                 any_warnings = True
 
-        print("-"*56)
+        print("-"*66)
+        print("  * = early stopped")
 
         if any_warnings:
             print("\n⚠️  WARNING: One or more oracles have Spearman ρ < 0.5")
