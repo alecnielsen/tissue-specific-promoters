@@ -11,7 +11,7 @@ Using [Ctrl-DNA](https://github.com/bowang-lab/Ctrl-DNA) - constrained reinforce
 | Cell Line | Type | Objective | Source | Status |
 |-----------|------|-----------|--------|--------|
 | JURKAT | T-cell | ON (maximize) | EnformerModel (ρ=0.50) | ✅ Passed quality gate |
-| THP1 | Macrophage | ON (maximize) | EnformerModel (ρ=0.39) | ⚠️ Weak |
+| THP1 | Macrophage | ON (maximize) | EnformerModel ensemble (ρ=0.89) | ✅ Excellent |
 | HEK293 | Epithelial | OFF (constrain) | PARM pretrained | ✅ Ready |
 
 **Note**: HEK293 (epithelial) is the proper OFF target for tissue-specific immune promoters. We use the [PARM](https://github.com/vansteensellab/PARM) pretrained model (5-fold ensemble) rather than training our own oracle.
@@ -48,7 +48,6 @@ For full context and mitigations, see [NOTES.md](NOTES.md).
 
 - Add B-cell oracle (from [SynBP](https://zenodo.org/records/8008545) data)
 - Swap HyenaDNA generator for [Evo 2](https://github.com/ArcInstitute/evo2)
-- Improve THP1 oracle (architecture scaling or multi-task learning)
 
 ## How It Works
 

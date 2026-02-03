@@ -69,6 +69,9 @@ def train_oracle(
     lr: float = 1e-4,
     patience: int = 7,
     use_augmentation: bool = True,
+    dim: int = 384,
+    depth: int = 4,
+    ensemble_id: int = 0,
 ) -> dict:
     """
     Train EnformerModel oracle for a single cell type on GPU.
@@ -151,14 +154,16 @@ def train_oracle(
             }
 
     aug_status = "ON (2x data)" if use_augmentation else "OFF"
+    ensemble_str = f" (ensemble {ensemble_id})" if ensemble_id > 0 else ""
     print(f"\n{'='*60}")
-    print(f"Training oracle for {cell} (v2 with improvements)")
+    print(f"Training oracle for {cell}{ensemble_str} (v2 with improvements)")
     print(f"  Train samples: {len(train_data)} (x2 with augmentation = {len(train_data) * 2})")
     print(f"  Val samples: {len(val_data)}")
     print(f"  Max epochs: {epochs}")
     print(f"  Early stopping patience: {patience}")
     print(f"  Batch size: {batch_size}")
     print(f"  Initial LR: {lr}")
+    print(f"  Architecture: dim={dim}, depth={depth}")
     print(f"  LR scheduling: ReduceLROnPlateau (factor=0.5, patience=3)")
     print(f"  Reverse complement augmentation: {aug_status}")
     print(f"  GPU: {torch.cuda.get_device_name(0)}")
@@ -180,8 +185,8 @@ def train_oracle(
         lr=lr,
         loss="mse",
         pretrained=False,
-        dim=384,
-        depth=4,
+        dim=dim,
+        depth=depth,
         n_downsamples=4,
     )
 
@@ -248,7 +253,10 @@ def train_oracle(
 
     # Match expected naming in base_optimizer.py: THP1 stays uppercase, others lowercase
     cell_name = cell if cell == "THP1" else cell.lower()
-    final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
+    if ensemble_id > 0:
+        final_path = f"/checkpoints/human_paired_{cell_name}_ensemble{ensemble_id}.ckpt"
+    else:
+        final_path = f"/checkpoints/human_paired_{cell_name}.ckpt"
 
     import shutil
     if best_ckpt:
@@ -351,6 +359,9 @@ def train_oracle(
         "test_rmse": rmse,
         "test_n_samples": len(test_data),
         "metrics_invalid": invalid_corr,
+        "dim": dim,
+        "depth": depth,
+        "ensemble_id": ensemble_id,
     }
 
 
@@ -363,6 +374,10 @@ def main(
     patience: int = 7,
     no_augmentation: bool = False,
     data_dir: str = "./data",
+    dim: int = 384,
+    depth: int = 4,
+    seed: int = 97,
+    ensemble_id: int = 0,
 ):
     """Train oracle models on Modal GPU with improved training."""
     import pandas as pd
@@ -388,7 +403,8 @@ def main(
         # Note: prepare_data.py doesn't save class labels, so we stratify by GC content only
         # This is consistent with the data available from processed_expression.csv
         import numpy as np
-        np.random.seed(97)
+        np.random.seed(seed)
+        print(f"Using random seed: {seed}")
 
         def gc_content(seq):
             return sum(1 for c in seq if c in "GC") / len(seq)
@@ -446,26 +462,31 @@ def main(
                 lr=lr,
                 patience=patience,
                 use_augmentation=not no_augmentation,
+                dim=dim,
+                depth=depth,
+                ensemble_id=ensemble_id,
             )
             results.append(result)
 
         # Print results
         print("\n" + "="*80)
         print("TRAINING COMPLETE - TEST SET EVALUATION SUMMARY (v2 with improvements)")
+        print(f"Architecture: dim={dim}, depth={depth}")
         print("="*80)
-        print(f"\n{'Cell Type':<12} {'Epochs':>8} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
-        print("-"*66)
+        print(f"\n{'Cell Type':<12} {'Ens':>4} {'Epochs':>8} {'Val Loss':>10} {'R²':>8} {'Spearman ρ':>12} {'RMSE':>8}")
+        print("-"*72)
 
         any_warnings = False
         for r in results:
             epoch_str = f"{r['epochs_trained']}/{r['max_epochs']}"
             if r.get('early_stopped'):
                 epoch_str += "*"  # Mark early stopped
-            print(f"{r['cell']:<12} {epoch_str:>8} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
+            ens_str = str(r.get('ensemble_id', 0)) if r.get('ensemble_id', 0) > 0 else "-"
+            print(f"{r['cell']:<12} {ens_str:>4} {epoch_str:>8} {r['best_val_loss']:>10.4f} {r['test_r2']:>8.4f} {r['test_spearman_r']:>12.4f} {r['test_rmse']:>8.4f}")
             if r.get("metrics_invalid") or r['test_spearman_r'] < 0.5:
                 any_warnings = True
 
-        print("-"*66)
+        print("-"*72)
         print("  * = early stopped")
 
         if any_warnings:

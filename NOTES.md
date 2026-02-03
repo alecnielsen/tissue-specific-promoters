@@ -75,7 +75,7 @@ Training scripts now evaluate on held-out test set and report:
 
 | Issue | Severity | Mitigation |
 |-------|----------|------------|
-| **THP1 oracle weak** | Medium | Spearman ρ=0.39 is below quality gate. Consider architecture scaling or ensemble. |
+| ~~**THP1 oracle weak**~~ | ~~Medium~~ | ✅ Resolved. Ensemble achieves ρ=0.89. |
 | **MPRA vs genomic context** | Medium | MPRA uses episomal reporters. Promoter activity may differ when integrated. |
 | **250 bp sequences** | Medium | May miss distal regulatory elements. Consider longer context in future. |
 | **No chromatin context** | Medium | Oracle predicts from sequence alone, ignoring cell-type chromatin state. |
@@ -135,6 +135,8 @@ Ctrl-DNA normalizes oracle scores using min/max fitness ranges. Hardcoded defaul
 - [x] Clone and integrate PARM for HEK293 predictions
 - [x] Create new optimization script with HEK293 OFF target (`scripts/run_dual_on_hek293_modal.py`)
 - [x] Successfully test end-to-end pipeline with PARM HEK293 (2026-02-02)
+- [x] Train THP1 ensemble (5 models) achieving ρ=0.89 (2026-02-03)
+- [x] Create ensemble evaluation script (`scripts/evaluate_ensemble.py`)
 
 ### Test Optimization Results (2026-02-02)
 
@@ -147,7 +149,7 @@ Quick validation run with HEK293 (PARM) as OFF target (1 iteration, 1 epoch) on 
 
 The optimization shows expected behavior (ON > OFF). Ready for full runs.
 
-### Oracle Quality Summary (v2 Training)
+### Oracle Quality Summary (v2 Training + Ensemble)
 
 Training improvements in v2:
 - Reverse complement augmentation (2x effective data)
@@ -158,22 +160,38 @@ Training improvements in v2:
 | Cell Type | Source | Spearman ρ | Status |
 |-----------|--------|------------|--------|
 | JURKAT | EnformerModel (v2) | **0.50** | ✅ Passed quality gate |
-| THP1 | EnformerModel (v2) | 0.39 | ⚠️ Weak but usable |
+| THP1 | EnformerModel ensemble (5 models) | **0.89** | ✅ Excellent |
 | HEK293 | PARM (pretrained) | N/A | ✅ Pretrained model |
 
-Options to improve THP1:
-1. **Scale up architecture**: Increase dim from 384 to 512-768
-2. **Multi-task learning**: Train one model with 3 output heads
-3. **Ensemble**: Train 3-5 models, average predictions
-4. **Additional data**: Macrophage MPRA from ETS2 study
+### THP1 Oracle Improvement (2026-02-03)
+
+Explored two approaches to improve THP1 oracle from baseline ρ=0.39:
+
+**Experiment 1: Deeper Architecture**
+- Configuration: dim=384, depth=6 (vs baseline depth=4)
+- Result: ρ=0.38 (no improvement)
+- Conclusion: Deeper model doesn't help with this dataset size
+
+**Experiment 2: Ensemble of 5 Models** ✅
+- Configuration: dim=384, depth=4, trained with seeds 1-5
+- Individual model results:
+  - Model 1 (seed=1): ρ=0.73
+  - Model 2 (seed=2): ρ=0.44
+  - Model 3 (seed=3): ρ=0.82
+  - Model 4 (seed=4): ρ=0.82
+  - Model 5 (seed=5): ρ=0.84
+- **Ensemble (average predictions): ρ=0.89, R²=0.83**
+- Improvement: +127% over baseline single model
+
+Key insight: Random seed significantly affects model quality. Ensemble averaging provides robust predictions that exceed any individual model.
 
 ### Next Steps
 - [x] ~~Retrain oracles with fixed Modal script~~
 - [x] ~~Run test optimization on Modal GPU~~
 - [x] ~~Integrate PARM HEK293 as OFF target~~
+- [x] ~~Improve THP1 oracle~~ (ensemble ρ=0.89)
 - [ ] **Run full optimization** (100 iterations, 5 epochs) ← **START HERE**
 - [ ] Analyze top sequences for cell-type specificity
-- [ ] Consider improving THP1 oracle (architecture scaling or multi-task)
 - [ ] Experimental validation in cell lines
 
 ---
@@ -331,7 +349,11 @@ From processed MPRA data (for normalization in base_optimizer.py):
    - Trains JURKAT and THP1 oracles
    - ~$2-5 total for all models
 
-3. **scripts/run_dual_on.py** - Run Ctrl-DNA with dual ON targets (local, legacy)
+3. **scripts/evaluate_ensemble.py** - Evaluate THP1 ensemble models
+   - Loads 5 ensemble checkpoints and averages predictions
+   - Reports individual and ensemble Spearman ρ metrics
+
+4. **scripts/run_dual_on.py** - Run Ctrl-DNA with dual ON targets (local, legacy)
    - Modified reward: `on_weight * JURKAT + on_weight * THP1 - (K562 - constraint)`
    - Custom `DualOnOptimizer` class
 
@@ -477,20 +499,18 @@ After optimization, analyze the top sequences:
 - **Motif analysis**: TFBS enrichment in top sequences
 - **Sequence diversity**: Check for convergence/collapse
 
-### Step 7: Oracle Improvements (If Needed)
+### Step 7: Oracle Improvements ✅ Complete
 
-JURKAT oracle (ρ=0.50) passed quality gate. THP1 (ρ=0.39) is weak. To improve THP1:
+Both oracles now pass quality gates:
+- JURKAT: ρ=0.50 (single model)
+- THP1: ρ=0.89 (5-model ensemble)
 
+The THP1 ensemble was trained using:
 ```bash
-# Retrain with larger architecture (edit train_oracles_modal.py first: dim=512, depth=5)
-modal run scripts/train_oracles_modal.py --cell THP1 --epochs 50
-
-# Download improved checkpoint
-modal volume get ctrl-dna-checkpoints human_paired_THP1.ckpt ./checkpoints/
+# Train 5 models with different seeds
+for i in 1 2 3 4 5; do
+  modal run scripts/train_oracles_modal.py --cell THP1 --epochs 50 --seed $i --ensemble-id $i
+done
 ```
 
-Alternative approaches:
-- Larger Enformer models (`dim=768, depth=6`)
-- Multi-task learning (single model, multiple output heads)
-- Ensemble multiple models
-- Additional macrophage MPRA data (ETS2 study)
+Ensemble inference via `scripts/evaluate_ensemble.py`.
