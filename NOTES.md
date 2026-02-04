@@ -159,7 +159,7 @@ Training improvements in v2:
 
 | Cell Type | Source | Spearman ρ | Status |
 |-----------|--------|------------|--------|
-| JURKAT | EnformerModel (v2) | **0.50** | ✅ Passed quality gate |
+| JURKAT | EnformerModel ensemble (5 models) | **0.54** | ✅ Passed quality gate |
 | THP1 | EnformerModel ensemble (5 models) | **0.89** | ✅ Excellent |
 | HEK293 | PARM (pretrained) | N/A | ✅ Pretrained model |
 
@@ -185,12 +185,32 @@ Explored two approaches to improve THP1 oracle from baseline ρ=0.39:
 
 Key insight: Random seed significantly affects model quality. Ensemble averaging provides robust predictions that exceed any individual model.
 
+### JURKAT Oracle Improvement (2026-02-04)
+
+Applied same ensemble approach to JURKAT:
+
+**Ensemble of 5 Models**
+- Configuration: dim=384, depth=4, trained with seeds 1-5
+- Individual model results:
+  - Model 1 (seed=1): ρ=0.49
+  - Model 2 (seed=2): ρ=0.45
+  - Model 3 (seed=3): ρ=0.51
+  - Model 4 (seed=4): ρ=0.50
+  - Model 5 (seed=5): ρ=0.48
+- **Ensemble (average predictions): ρ=0.54, R²=0.34**
+- Improvement: +8.2% over baseline single model (ρ=0.50)
+
+Note: JURKAT improvement is more modest than THP1 (+8% vs +127%) because the baseline single model was already better calibrated. The JURKAT oracle appears to have a harder performance ceiling around ρ~0.54 with current data/architecture.
+
 ### Next Steps
 - [x] ~~Retrain oracles with fixed Modal script~~
 - [x] ~~Run test optimization on Modal GPU~~
 - [x] ~~Integrate PARM HEK293 as OFF target~~
 - [x] ~~Improve THP1 oracle~~ (ensemble ρ=0.89)
+- [x] ~~Improve JURKAT oracle~~ (ensemble ρ=0.54)
 - [x] ~~Run full optimization~~ (100 iterations, 5 epochs) ✅ **COMPLETE**
+- [ ] Update optimization script to use ensembles
+- [ ] Re-run optimization with improved oracles
 - [ ] Analyze top sequences for cell-type specificity
 - [ ] Experimental validation in cell lines
 
@@ -326,9 +346,11 @@ data/
         └── THP1_tfbs_freq_all.csv
 
 checkpoints/
-├── human_paired_jurkat.ckpt          # JURKAT oracle (ρ=0.50)
-├── human_paired_THP1.ckpt            # THP1 oracle (ρ=0.39)
-└── human_paired_k562.ckpt            # K562 oracle (not used - replaced by PARM)
+├── human_paired_jurkat.ckpt              # JURKAT single model (ρ=0.50, superseded by ensemble)
+├── human_paired_jurkat_ensemble[1-5].ckpt # JURKAT ensemble (5 models, ρ=0.54 combined)
+├── human_paired_THP1.ckpt                # THP1 single model (ρ=0.39, superseded by ensemble)
+├── human_paired_THP1_ensemble[1-5].ckpt  # THP1 ensemble (5 models, ρ=0.89 combined)
+└── human_paired_k562.ckpt                # K562 oracle (not used - replaced by PARM)
 
 PARM/pre_trained_models/HEK293/
 ├── HEK293_fold0.parm                 # PARM HEK293 ensemble (5 folds)
@@ -371,9 +393,10 @@ From processed MPRA data (for normalization in base_optimizer.py):
    - Trains JURKAT and THP1 oracles
    - ~$2-5 total for all models
 
-3. **scripts/evaluate_ensemble.py** - Evaluate THP1 ensemble models
+3. **scripts/evaluate_ensemble.py** - Evaluate ensemble models (THP1 or JURKAT)
    - Loads 5 ensemble checkpoints and averages predictions
    - Reports individual and ensemble Spearman ρ metrics
+   - Usage: `python scripts/evaluate_ensemble.py --cell JURKAT` or `--cell THP1`
 
 4. **scripts/run_dual_on.py** - Run Ctrl-DNA with dual ON targets (local, legacy)
    - Modified reward: `on_weight * JURKAT + on_weight * THP1 - (K562 - constraint)`
@@ -517,20 +540,20 @@ Analyze the top sequences from `results/dual_on_hek293_20260203_215622/top_100_s
 - **Sequence diversity**: Check for convergence/collapse
 - **GC content**: Distribution of nucleotide composition
 
-### Step 7: Oracle Improvements
+### Step 7: Oracle Improvements ✅ COMPLETE
 
-Current oracle quality:
-- JURKAT: ρ=0.50 (single model) — passes gate but could be improved
+Both oracles now have trained ensembles:
+- JURKAT: ρ=0.54 (5-model ensemble) ✅ Improved from 0.50
 - THP1: ρ=0.89 (5-model ensemble) ✅ Excellent
 
-**Recommended**: Train JURKAT ensemble using same approach as THP1:
+Training scripts:
+- `scripts/train_jurkat_ensemble.py` - Trains 5 JURKAT models in parallel
+- `scripts/train_oracles_modal.py --ensemble-id N` - Train individual ensemble members
+
+Evaluate ensembles:
 ```bash
-# Train 5 JURKAT models with different seeds
-for i in 1 2 3 4 5; do
-  modal run scripts/train_oracles_modal.py --cell JURKAT --epochs 50 --seed $i --ensemble-id $i
-done
+python scripts/evaluate_ensemble.py --cell JURKAT  # ρ=0.54
+python scripts/evaluate_ensemble.py --cell THP1    # ρ=0.89
 ```
 
-This could push JURKAT oracle from ρ=0.50 to ρ=0.7+ (based on THP1 improvement from ρ=0.39 to ρ=0.89).
-
-Ensemble inference via `scripts/evaluate_ensemble.py`.
+**Next**: Update optimization script to use ensembles instead of single models.

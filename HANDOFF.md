@@ -1,4 +1,4 @@
-# Handoff (2026-02-03)
+# Handoff (2026-02-04)
 
 ## Project Goal
 Tissue-specific promoter design using Ctrl-DNA with:
@@ -32,7 +32,7 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 
 | Cell Type | Source | Spearman ρ | Status |
 |-----------|--------|------------|--------|
-| JURKAT | EnformerModel (v2) | **0.5019** | ✅ Passed |
+| JURKAT | EnformerModel ensemble (5 models) | **0.5408** | ✅ Improved |
 | THP1 | EnformerModel ensemble (5 models) | **0.8878** | ✅ Excellent |
 | HEK293 | PARM (pretrained) | N/A | ✅ Pretrained |
 
@@ -41,6 +41,13 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 - Individual model performance: ρ=0.44 to ρ=0.84
 - Ensemble (prediction averaging): **ρ=0.8878, R²=0.83**
 - Improvement: +127% over single model baseline (ρ=0.39)
+
+### JURKAT Ensemble Details (2026-02-04)
+- 5 models trained with different random seeds (1-5)
+- Individual model performance: ρ=0.45 to ρ=0.51
+- Ensemble (prediction averaging): **ρ=0.5408, R²=0.34**
+- Improvement: +8.2% over single model baseline (ρ=0.50)
+- Note: More modest improvement than THP1 due to better-calibrated baseline
 
 ### Training Improvements (v2)
 - Reverse complement augmentation (2x data)
@@ -76,10 +83,10 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 
 ## Next Steps
 
-1. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
-2. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
-3. **Improve JURKAT oracle**: Train 5-model ensemble (same approach as THP1)
-4. **Re-run optimization**: With improved oracles
+1. **Update optimization script**: Use JURKAT and THP1 ensembles instead of single models
+2. **Re-run optimization**: With improved ensemble oracles
+3. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
+4. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
 5. **Add B-cell oracle**: From SynBP data
 6. **Swap generator**: HyenaDNA → Evo 2
 
@@ -96,21 +103,29 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 ### Checkpoints
 ```
 checkpoints/
-├── human_paired_jurkat.ckpt (87MB)         - ρ=0.50 ✅
-├── human_paired_THP1.ckpt (87MB)           - ρ=0.39 (single model, superseded)
-├── human_paired_THP1_ensemble1.ckpt (87MB) - ρ=0.73 (ensemble member)
-├── human_paired_THP1_ensemble2.ckpt (87MB) - ρ=0.44 (ensemble member)
-├── human_paired_THP1_ensemble3.ckpt (87MB) - ρ=0.82 (ensemble member)
-├── human_paired_THP1_ensemble4.ckpt (87MB) - ρ=0.82 (ensemble member)
-├── human_paired_THP1_ensemble5.ckpt (87MB) - ρ=0.84 (ensemble member)
-└── human_paired_k562.ckpt (87MB)           - Not used (replaced by PARM)
+├── human_paired_jurkat.ckpt (87MB)             - ρ=0.50 (single model, superseded)
+├── human_paired_jurkat_ensemble1.ckpt (87MB)   - ρ=0.49 (ensemble member)
+├── human_paired_jurkat_ensemble2.ckpt (87MB)   - ρ=0.45 (ensemble member)
+├── human_paired_jurkat_ensemble3.ckpt (87MB)   - ρ=0.51 (ensemble member)
+├── human_paired_jurkat_ensemble4.ckpt (87MB)   - ρ=0.50 (ensemble member)
+├── human_paired_jurkat_ensemble5.ckpt (87MB)   - ρ=0.48 (ensemble member)
+├── human_paired_THP1.ckpt (87MB)               - ρ=0.39 (single model, superseded)
+├── human_paired_THP1_ensemble1.ckpt (87MB)     - ρ=0.73 (ensemble member)
+├── human_paired_THP1_ensemble2.ckpt (87MB)     - ρ=0.44 (ensemble member)
+├── human_paired_THP1_ensemble3.ckpt (87MB)     - ρ=0.82 (ensemble member)
+├── human_paired_THP1_ensemble4.ckpt (87MB)     - ρ=0.82 (ensemble member)
+├── human_paired_THP1_ensemble5.ckpt (87MB)     - ρ=0.84 (ensemble member)
+└── human_paired_k562.ckpt (87MB)               - Not used (replaced by PARM)
 
 PARM/pre_trained_models/HEK293/
 ├── HEK293_fold0.parm - HEK293_fold4.parm (5 ensemble models)
 ```
 
+**JURKAT Ensemble**: Use all 5 `human_paired_jurkat_ensemble*.ckpt` files together.
+Average predictions achieve ρ=0.54. See `scripts/evaluate_ensemble.py --cell JURKAT`.
+
 **THP1 Ensemble**: Use all 5 `human_paired_THP1_ensemble*.ckpt` files together.
-Average predictions achieve ρ=0.89. See `scripts/evaluate_ensemble.py`.
+Average predictions achieve ρ=0.89. See `scripts/evaluate_ensemble.py --cell THP1`.
 
 ### Data
 - `data/mpra_cache/processed_expression.csv` - Training data
@@ -130,6 +145,31 @@ source .venv/bin/activate
 pip install -e ".[modal]"
 git submodule update --init --recursive
 ```
+
+## Session Notes (2026-02-04)
+
+### Completed This Session
+1. **Trained JURKAT ensemble** (5 models with seeds 1-5)
+   - Created `scripts/train_jurkat_ensemble.py` for parallel training
+   - Individual models: ρ=0.45 to ρ=0.51
+   - Ensemble: ρ=0.5408 (+8.2% over baseline)
+2. **Updated `scripts/evaluate_ensemble.py`** to support both JURKAT and THP1
+3. **Downloaded JURKAT ensemble checkpoints** to local `checkpoints/`
+
+### JURKAT Ensemble Results
+
+| Model | Seed | Epochs | Spearman ρ |
+|-------|------|--------|------------|
+| Ensemble 1 | 1 | 26 | 0.4943 |
+| Ensemble 2 | 2 | 9 | 0.4509 |
+| Ensemble 3 | 3 | 33 | 0.5070 |
+| Ensemble 4 | 4 | 49 | 0.4992 |
+| Ensemble 5 | 5 | 35 | 0.4761 |
+| **Combined** | - | - | **0.5408** |
+
+**Observation**: JURKAT ensemble improvement (+8%) is more modest than THP1 (+127%) because the baseline JURKAT model was already better calibrated. The oracle appears to hit a ceiling around ρ~0.54 with current data/architecture.
+
+---
 
 ## Session Notes (2026-02-03)
 

@@ -1,11 +1,14 @@
 """
-Evaluate THP1 ensemble by averaging predictions from multiple models.
+Evaluate ensemble by averaging predictions from multiple models.
 
 Usage:
-    python scripts/evaluate_ensemble.py
+    python scripts/evaluate_ensemble.py              # Default: THP1
+    python scripts/evaluate_ensemble.py --cell THP1
+    python scripts/evaluate_ensemble.py --cell JURKAT
 """
 
 import sys
+import argparse
 from pathlib import Path
 
 # Add Ctrl-DNA to path
@@ -23,16 +26,25 @@ torch.serialization.add_safe_globals([pathlib.PosixPath])
 
 from src.reglm.regression import EnformerModel, SeqDataset
 
+# Baseline single-model performance for comparison
+BASELINES = {
+    "THP1": 0.39,
+    "JURKAT": 0.50,
+}
 
-def evaluate_ensemble():
-    """Evaluate ensemble of THP1 models."""
+
+def evaluate_ensemble(cell: str = "THP1"):
+    """Evaluate ensemble of models for a given cell type."""
+
+    print(f"\n{'='*70}")
+    print(f"EVALUATING {cell} ENSEMBLE")
+    print(f"{'='*70}")
 
     # Load data
     data_path = Path(__file__).parent.parent / "data" / "mpra_cache" / "processed_expression.csv"
     df = pd.read_csv(data_path)
 
-    # Same split as training (seed=97, but we'll use seed=5 for test consistency)
-    # Actually we need to use the same split as training
+    # Same split as training (seed=97)
     np.random.seed(97)
 
     def gc_content(seq):
@@ -54,14 +66,30 @@ def evaluate_ensemble():
     print(f"Test set: {len(test_df)} samples")
 
     # Prepare test data
-    test_data = test_df[["sequence", "THP1"]].copy().reset_index(drop=True)
+    test_data = test_df[["sequence", cell]].copy().reset_index(drop=True)
     test_data.columns = ["sequence", "label"]
     test_dataset = SeqDataset(test_data, seq_len=250)
     test_dl = DataLoader(test_dataset, batch_size=128, shuffle=False)
 
     # Load ensemble models
     checkpoint_dir = Path(__file__).parent.parent / "checkpoints"
-    ensemble_paths = sorted(checkpoint_dir.glob("human_paired_THP1_ensemble*.ckpt"))
+    # Handle case sensitivity: THP1 stays uppercase, JURKAT becomes lowercase in filenames
+    cell_name = cell if cell == "THP1" else cell.lower()
+    ensemble_paths = sorted(checkpoint_dir.glob(f"human_paired_{cell_name}_ensemble*.ckpt"))
+
+    if not ensemble_paths:
+        print(f"\nNo ensemble checkpoints found for {cell}!")
+        print(f"Expected pattern: checkpoints/human_paired_{cell_name}_ensemble*.ckpt")
+        print(f"\nTo train {cell} ensemble, run:")
+        if cell == "JURKAT":
+            print("  modal run scripts/train_jurkat_ensemble.py")
+        else:
+            print(f"  modal run scripts/train_oracles_modal.py --cell {cell} --seed 1 --ensemble-id 1")
+            print(f"  modal run scripts/train_oracles_modal.py --cell {cell} --seed 2 --ensemble-id 2")
+            print("  # ... etc for seeds 3-5")
+        print("\nThen download checkpoints:")
+        print(f"  modal volume get ctrl-dna-checkpoints human_paired_{cell_name}_ensemble*.ckpt ./checkpoints/")
+        return None
 
     print(f"\nLoading {len(ensemble_paths)} ensemble models...")
     models = []
@@ -125,7 +153,7 @@ def evaluate_ensemble():
     print(f"  RMSE:       {rmse:.4f}")
 
     # Compare to baseline
-    baseline_rho = 0.39
+    baseline_rho = BASELINES.get(cell, 0.5)
     improvement = (spearman_r - baseline_rho) / baseline_rho * 100
     print(f"\n  Baseline (single model): ρ={baseline_rho}")
     print(f"  Improvement: {improvement:+.1f}%")
@@ -136,6 +164,19 @@ def evaluate_ensemble():
     print(f"\n  Best individual: ρ={best_individual:.4f}")
     print(f"  Ensemble vs best individual: {ensemble_vs_best:+.1f}%")
 
+    return {
+        "cell": cell,
+        "ensemble_spearman": spearman_r,
+        "ensemble_r2": r2,
+        "best_individual": best_individual,
+        "baseline": baseline_rho,
+        "improvement_vs_baseline": improvement,
+    }
+
 
 if __name__ == "__main__":
-    evaluate_ensemble()
+    parser = argparse.ArgumentParser(description="Evaluate ensemble models")
+    parser.add_argument("--cell", type=str, default="THP1", choices=["THP1", "JURKAT"],
+                        help="Cell type to evaluate (default: THP1)")
+    args = parser.parse_args()
+    evaluate_ensemble(args.cell)
