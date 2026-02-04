@@ -2,8 +2,12 @@
 Run Ctrl-DNA dual ON optimization on Modal GPU with HEK293 (PARM) as OFF target.
 
 This version uses:
-- JURKAT and THP1 as ON targets (EnformerModel oracles)
+- JURKAT and THP1 as ON targets (EnformerModel ENSEMBLES - 5 models each)
 - HEK293 as OFF target (PARM pretrained model)
+
+Ensemble oracles:
+- JURKAT: 5 models, ensemble ρ=0.54 (+8% vs single model)
+- THP1: 5 models, ensemble ρ=0.89 (+127% vs single model)
 
 Usage:
     # Run optimization with defaults
@@ -97,22 +101,42 @@ def run_optimization(
     sys.path.insert(0, "/repo/PARM")  # Add PARM to path
     os.chdir("/repo/Ctrl-DNA/ctrl_dna")
 
-    # Copy checkpoints from volume to expected location
+    # Copy ensemble checkpoints from volume to expected location
     os.makedirs("/repo/checkpoints", exist_ok=True)
     import shutil
-    for ckpt in ["human_paired_jurkat.ckpt", "human_paired_THP1.ckpt"]:
+    import glob as glob_module
+
+    # Copy JURKAT ensemble (5 models)
+    for i in range(1, 6):
+        ckpt = f"human_paired_jurkat_ensemble{i}.ckpt"
         src = f"/checkpoints/{ckpt}"
         dst = f"/repo/checkpoints/{ckpt}"
         if os.path.exists(src) and not os.path.exists(dst):
             shutil.copy(src, dst)
-            print(f"Copied {ckpt} to /repo/checkpoints/")
+            print(f"Copied {ckpt}")
+
+    # Copy THP1 ensemble (5 models)
+    for i in range(1, 6):
+        ckpt = f"human_paired_THP1_ensemble{i}.ckpt"
+        src = f"/checkpoints/{ckpt}"
+        dst = f"/repo/checkpoints/{ckpt}"
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy(src, dst)
+            print(f"Copied {ckpt}")
+
+    # Also copy single model checkpoints (needed for base class init, then replaced)
+    for ckpt in ["human_paired_jurkat.ckpt", "human_paired_THP1.ckpt", "human_paired_k562.ckpt"]:
+        src = f"/checkpoints/{ckpt}"
+        dst = f"/repo/checkpoints/{ckpt}"
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy(src, dst)
 
     print(f"\n{'='*60}")
     print("DUAL ON OPTIMIZATION with HEK293 (PARM) OFF target")
     print(f"{'='*60}")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"ON targets: JURKAT, THP1 (EnformerModel)")
-    print(f"OFF target: HEK293 (PARM pretrained)")
+    print(f"ON targets: JURKAT, THP1 (EnformerModel ENSEMBLES, 5 models each)")
+    print(f"OFF target: HEK293 (PARM pretrained, 5 folds)")
     print(f"Max iterations: {max_iter}")
     print(f"Epochs per iteration: {epochs}")
     print(f"Batch size: {batch_size}")
@@ -134,6 +158,39 @@ def run_optimization(
     # Import PARM components
     from PARM.PARM_utils_load_model import load_PARM
     from PARM.PARM_predict import sequence_to_onehot
+
+    class EnsembleModel:
+        """Wrapper that loads multiple EnformerModel checkpoints and averages predictions."""
+
+        def __init__(self, checkpoint_paths: list, device: str = "cuda"):
+            self.models = []
+            self.device = device
+            for path in checkpoint_paths:
+                model = EnformerModel.load_from_checkpoint(path, map_location=device)
+                model.to(device)
+                model.eval()
+                self.models.append(model)
+            print(f"  Loaded {len(self.models)} ensemble models")
+
+        def __call__(self, sequences):
+            """Score sequences by averaging predictions from all models."""
+            all_preds = []
+            with torch.no_grad():
+                for model in self.models:
+                    pred = model(sequences)
+                    all_preds.append(pred)
+            # Average predictions across ensemble
+            return torch.stack(all_preds).mean(dim=0)
+
+    def load_ensemble(cell: str, checkpoint_dir: str, device: str = "cuda"):
+        """Load ensemble of models for a cell type."""
+        # Handle case: JURKAT -> jurkat, THP1 -> THP1
+        cell_name = cell if cell == "THP1" else cell.lower()
+        paths = sorted(glob_module.glob(f"{checkpoint_dir}/human_paired_{cell_name}_ensemble*.ckpt"))
+        if not paths:
+            raise FileNotFoundError(f"No ensemble checkpoints found for {cell} in {checkpoint_dir}")
+        print(f"Loading {cell} ensemble ({len(paths)} models)...")
+        return EnsembleModel(paths, device)
 
     # Load PARM HEK293 models (ensemble of 5 folds)
     print("Loading PARM HEK293 models...")
@@ -233,9 +290,17 @@ def run_optimization(
     hek293_min = -2.0
     hek293_max = 8.0
 
+    # Load JURKAT and THP1 ensembles
+    print("\nLoading ON target ensembles...")
+    jurkat_ensemble = load_ensemble("JURKAT", "/repo/checkpoints", "cuda")
+    thp1_ensemble = load_ensemble("THP1", "/repo/checkpoints", "cuda")
+
     # Define DualOnOptimizer with HEK293
     class DualOnOptimizerHEK293(Lagrange_optimizer):
-        """Modified Lagrange optimizer for dual ON targets with HEK293 OFF."""
+        """Modified Lagrange optimizer for dual ON targets with HEK293 OFF.
+
+        Uses ensemble models for JURKAT and THP1 (5 models each, predictions averaged).
+        """
 
         def __init__(self, cfg):
             cfg.task = "JURKAT"
@@ -247,8 +312,12 @@ def run_optimization(
             self.on_indices = [0, 2]  # JURKAT, THP1
             self.off_index = 1  # HEK293
 
-            # Replace K562 target with HEK293 PARM
-            # targets dict has: JURKAT, K562, THP1 - we replace K562 scoring
+            # Replace single models with ensembles
+            print("Replacing single models with ensembles...")
+            self.targets['JURKAT'] = jurkat_ensemble
+            self.targets['THP1'] = thp1_ensemble
+            print("  JURKAT: 5-model ensemble (ρ=0.54)")
+            print("  THP1: 5-model ensemble (ρ=0.89)")
             print("Setting up HEK293 (PARM) as OFF target...")
 
         def normalize_hek293(self, score):
@@ -388,6 +457,10 @@ def run_optimization(
             "off_constraint": off_constraint,
             "seed": seed,
             "off_target": "HEK293_PARM",
+            "on_targets": {
+                "JURKAT": {"type": "ensemble", "n_models": 5, "rho": 0.54},
+                "THP1": {"type": "ensemble", "n_models": 5, "rho": 0.89},
+            },
         },
         "results": {
             "total_sequences": len(results_df),
@@ -432,7 +505,10 @@ def main(
 ):
     """Run dual ON optimization with HEK293 (PARM) as OFF target."""
     print("Launching optimization on Modal...")
-    print("Using HEK293 (PARM pretrained) as OFF target instead of K562")
+    print("Using ENSEMBLE oracles:")
+    print("  - JURKAT: 5-model ensemble (ρ=0.54)")
+    print("  - THP1: 5-model ensemble (ρ=0.89)")
+    print("  - HEK293: PARM pretrained (5 folds)")
 
     result = run_optimization.remote(
         max_iter=max_iter,

@@ -137,6 +137,7 @@ Ctrl-DNA normalizes oracle scores using min/max fitness ranges. Hardcoded defaul
 - [x] Successfully test end-to-end pipeline with PARM HEK293 (2026-02-02)
 - [x] Train THP1 ensemble (5 models) achieving ρ=0.89 (2026-02-03)
 - [x] Create ensemble evaluation script (`scripts/evaluate_ensemble.py`)
+- [x] Update optimization script to use JURKAT and THP1 ensembles (2026-02-04)
 
 ### Test Optimization Results (2026-02-02)
 
@@ -209,8 +210,8 @@ Note: JURKAT improvement is more modest than THP1 (+8% vs +127%) because the bas
 - [x] ~~Improve THP1 oracle~~ (ensemble ρ=0.89)
 - [x] ~~Improve JURKAT oracle~~ (ensemble ρ=0.54)
 - [x] ~~Run full optimization~~ (100 iterations, 5 epochs) ✅ **COMPLETE**
-- [ ] Update optimization script to use ensembles
-- [ ] Re-run optimization with improved oracles
+- [x] ~~Update optimization script to use ensembles~~ ✅ **COMPLETE** (2026-02-04)
+- [ ] Re-run optimization with improved ensemble oracles
 - [ ] Analyze top sequences for cell-type specificity
 - [ ] Experimental validation in cell lines
 
@@ -409,7 +410,8 @@ From processed MPRA data (for normalization in base_optimizer.py):
 5. **scripts/run_dual_on_hek293_modal.py** - **Main optimization script (recommended)**
    - Uses PARM HEK293 (epithelial) as OFF target
    - PARM 5-fold ensemble for robust predictions
-   - EnformerModel for JURKAT and THP1 ON targets
+   - **JURKAT ensemble** (5 models, ρ=0.54) for ON target
+   - **THP1 ensemble** (5 models, ρ=0.89) for ON target
    - Results saved to Modal volume `ctrl-dna-results`
    - ~$5-15 for full run (100 iter, 5 epochs)
 
@@ -556,4 +558,22 @@ python scripts/evaluate_ensemble.py --cell JURKAT  # ρ=0.54
 python scripts/evaluate_ensemble.py --cell THP1    # ρ=0.89
 ```
 
-**Next**: Update optimization script to use ensembles instead of single models.
+### Step 8: Optimization Script Updated to Use Ensembles ✅ COMPLETE (2026-02-04)
+
+Updated `scripts/run_dual_on_hek293_modal.py` to use ensemble oracles:
+- Added `EnsembleModel` wrapper class that loads 5 checkpoints and averages predictions
+- JURKAT and THP1 ensembles replace single models after base class initialization
+- Test run verified: ensembles load and score correctly
+
+**Quick test results** (1 iter, 256 sequences):
+| Metric | Value |
+|--------|-------|
+| Top reward | 0.30 |
+| Top 10 avg JURKAT | 0.45 |
+| Top 10 avg THP1 | 0.38 |
+| Top 10 avg HEK293 | 0.36 |
+
+**Next**: Run full optimization with ensemble oracles:
+```bash
+modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+```

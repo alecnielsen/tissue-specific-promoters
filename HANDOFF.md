@@ -83,8 +83,11 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 
 ## Next Steps
 
-1. **Update optimization script**: Use JURKAT and THP1 ensembles instead of single models
+1. ~~**Update optimization script**: Use JURKAT and THP1 ensembles instead of single models~~ ✅ Done
 2. **Re-run optimization**: With improved ensemble oracles
+   ```bash
+   modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+   ```
 3. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
 4. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
 5. **Add B-cell oracle**: From SynBP data
@@ -149,7 +152,13 @@ git submodule update --init --recursive
 ## Session Notes (2026-02-04)
 
 ### Completed This Session
-1. **Trained JURKAT ensemble** (5 models with seeds 1-5)
+1. **Updated optimization script to use ensembles**
+   - Modified `scripts/run_dual_on_hek293_modal.py` to load JURKAT and THP1 ensembles
+   - Added `EnsembleModel` wrapper class that averages predictions from 5 models
+   - Ensembles replace single models after base class initialization
+   - Ready to re-run optimization with improved oracles
+
+2. **Trained JURKAT ensemble** (5 models with seeds 1-5)
    - Created `scripts/train_jurkat_ensemble.py` for parallel training
    - Individual models: ρ=0.45 to ρ=0.51
    - Ensemble: ρ=0.5408 (+8.2% over baseline)
