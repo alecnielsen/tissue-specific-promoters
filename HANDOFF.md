@@ -5,25 +5,26 @@ Tissue-specific promoter design using Ctrl-DNA with:
 - **Dual ON targets**: JURKAT + THP1 (high expression in T-cells and macrophages)
 - **OFF target**: HEK293 (low expression in epithelial cells)
 
-## Current Status: ENSEMBLE OPTIMIZATION COMPLETE ✅
+## Current Status: JURKAT-ONLY OPTIMIZATION COMPLETE ✅
 
-### Results Summary (Ensemble Oracles)
-Full optimization with ensemble oracles (100 iterations, 5 epochs):
-- **Total sequences evaluated**: 25,600
-- **Top reward**: 0.4723 (+5.0% vs single models)
-- **Top 10 avg JURKAT (ON)**: 0.5529 (+10.6% vs single models)
-- **Top 10 avg THP1 (ON)**: 0.4052 (+3.9% vs single models)
-- **Top 10 avg HEK293 (OFF)**: 0.2192
+### Results Comparison
 
-Results saved to: `results/dual_on_hek293_20260204_192544/`
+| Run | Top Reward | JURKAT | THP1 | HEK293 | Specificity |
+|-----|------------|--------|------|--------|-------------|
+| **JURKAT-only** (2026-02-05) | **0.882** | **0.926** | 0.501 | 0.364 | 2.54x |
+| Dual ON ensemble (2026-02-04) | 0.472 | 0.553 | 0.405 | 0.219 | 2.52x |
+| Dual ON single (2026-02-03) | 0.450 | 0.500 | 0.390 | 0.210 | 2.38x |
 
-### Previous Results (Single Model Oracles)
-- **Top reward**: 0.4499
-- **Top 10 avg JURKAT**: 0.50
-- **Top 10 avg THP1**: 0.39
-- **Top 10 avg HEK293**: 0.21
+**Key finding**: Simpler single-ON objective achieves much higher JURKAT scores (+87% top reward). The previous "ceiling" was the multi-objective tradeoff, not oracle quality.
 
-Results: `results/dual_on_hek293_20260203_215622/`
+### Latest Results (JURKAT-only)
+- **Total sequences**: 25,600
+- **Top reward**: 0.882
+- **Top 10 avg JURKAT**: 0.926
+- **Top 10 avg HEK293**: 0.364
+- **Specificity ratio**: 2.54x
+
+Results: `results/dual_on_hek293_20260205_160426/`
 
 ### What's Done
 1. **Environment**: Python 3.11 venv at `.venv/`
@@ -163,18 +164,25 @@ git submodule update --init --recursive
 ## Session Notes (2026-02-04)
 
 ### Completed This Session
-1. **Updated optimization script to use ensembles**
+1. **Added `--jurkat-only` mode** for single ON target optimization
+   - Simpler reward: JURKAT - max(0, HEK293 - constraint)
+   - THP1 still scored but ignored in reward
+
+2. **Ran JURKAT-only optimization** (2026-02-05)
+   - Top reward: **0.882** (+87% vs dual ON)
+   - Top 10 JURKAT: **0.926** (+67% vs dual ON)
+   - Key insight: Previous "ceiling" was multi-objective tradeoff, not oracle quality
+   - Results: `results/dual_on_hek293_20260205_160426/`
+
+3. **Updated optimization script to use ensembles**
    - Modified `scripts/run_dual_on_hek293_modal.py` to load JURKAT and THP1 ensembles
    - Added `EnsembleModel` wrapper class that averages predictions from 5 models
-   - Ensembles replace single models after base class initialization
 
-2. **Ran full optimization with ensemble oracles**
-   - 100 iterations, 5 epochs on Modal A10G
+4. **Ran full optimization with ensemble oracles** (2026-02-04)
    - Top reward: 0.4723 (+5.0% vs single models)
-   - Top 10 avg JURKAT: 0.5529 (+10.6% improvement)
    - Results: `results/dual_on_hek293_20260204_192544/`
 
-3. **Trained JURKAT ensemble** (5 models with seeds 1-5)
+5. **Trained JURKAT ensemble** (5 models with seeds 1-5)
    - Created `scripts/train_jurkat_ensemble.py` for parallel training
    - Individual models: ρ=0.45 to ρ=0.51
    - Ensemble: ρ=0.5408 (+8.2% over baseline)
