@@ -5,17 +5,25 @@ Tissue-specific promoter design using Ctrl-DNA with:
 - **Dual ON targets**: JURKAT + THP1 (high expression in T-cells and macrophages)
 - **OFF target**: HEK293 (low expression in epithelial cells)
 
-## Current Status: FIRST FULL OPTIMIZATION COMPLETE ✅
+## Current Status: ENSEMBLE OPTIMIZATION COMPLETE ✅
 
-### Results Summary
-Full optimization run completed (100 iterations, 5 epochs):
+### Results Summary (Ensemble Oracles)
+Full optimization with ensemble oracles (100 iterations, 5 epochs):
 - **Total sequences evaluated**: 25,600
-- **Top reward**: 0.4499
-- **Top 10 avg JURKAT (ON)**: 0.50
-- **Top 10 avg THP1 (ON)**: 0.39
-- **Top 10 avg HEK293 (OFF)**: 0.21
+- **Top reward**: 0.4723 (+5.0% vs single models)
+- **Top 10 avg JURKAT (ON)**: 0.5529 (+10.6% vs single models)
+- **Top 10 avg THP1 (ON)**: 0.4052 (+3.9% vs single models)
+- **Top 10 avg HEK293 (OFF)**: 0.2192
 
-Results saved to: `results/dual_on_hek293_20260203_215622/`
+Results saved to: `results/dual_on_hek293_20260204_192544/`
+
+### Previous Results (Single Model Oracles)
+- **Top reward**: 0.4499
+- **Top 10 avg JURKAT**: 0.50
+- **Top 10 avg THP1**: 0.39
+- **Top 10 avg HEK293**: 0.21
+
+Results: `results/dual_on_hek293_20260203_215622/`
 
 ### What's Done
 1. **Environment**: Python 3.11 venv at `.venv/`
@@ -74,20 +82,22 @@ Results saved to: `results/dual_on_hek293_20260203_215622/`
 - THP1 expression is moderate (ensemble oracle may be conservative)
 - Top sequences are GC-rich with typical promoter motifs
 
-### Output Files
-- `results/dual_on_hek293_20260203_215622/top_100_sequences.csv` — Best candidates for validation
-- `results/dual_on_hek293_20260203_215622/all_sequences.csv` — Full 25,600 sequence dataset
-- `results/dual_on_hek293_20260203_215622/summary.json` — Run config and metrics
+### Output Files (Ensemble Run - Latest)
+- `results/dual_on_hek293_20260204_192544/top_100_sequences.csv` — Best candidates for validation
+- `results/dual_on_hek293_20260204_192544/all_sequences.csv` — Full 25,600 sequence dataset
+- `results/dual_on_hek293_20260204_192544/summary.json` — Run config and metrics
+
+### Output Files (Single Model Run - Previous)
+- `results/dual_on_hek293_20260203_215622/top_100_sequences.csv`
+- `results/dual_on_hek293_20260203_215622/all_sequences.csv`
+- `results/dual_on_hek293_20260203_215622/summary.json`
 
 ---
 
 ## Next Steps
 
 1. ~~**Update optimization script**: Use JURKAT and THP1 ensembles instead of single models~~ ✅ Done
-2. **Re-run optimization**: With improved ensemble oracles
-   ```bash
-   modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
-   ```
+2. ~~**Re-run optimization**: With improved ensemble oracles~~ ✅ Done (2026-02-04)
 3. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
 4. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
 5. **Add B-cell oracle**: From SynBP data
@@ -156,9 +166,14 @@ git submodule update --init --recursive
    - Modified `scripts/run_dual_on_hek293_modal.py` to load JURKAT and THP1 ensembles
    - Added `EnsembleModel` wrapper class that averages predictions from 5 models
    - Ensembles replace single models after base class initialization
-   - Ready to re-run optimization with improved oracles
 
-2. **Trained JURKAT ensemble** (5 models with seeds 1-5)
+2. **Ran full optimization with ensemble oracles**
+   - 100 iterations, 5 epochs on Modal A10G
+   - Top reward: 0.4723 (+5.0% vs single models)
+   - Top 10 avg JURKAT: 0.5529 (+10.6% improvement)
+   - Results: `results/dual_on_hek293_20260204_192544/`
+
+3. **Trained JURKAT ensemble** (5 models with seeds 1-5)
    - Created `scripts/train_jurkat_ensemble.py` for parallel training
    - Individual models: ρ=0.45 to ρ=0.51
    - Ensemble: ρ=0.5408 (+8.2% over baseline)

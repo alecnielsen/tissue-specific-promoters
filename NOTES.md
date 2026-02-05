@@ -211,30 +211,31 @@ Note: JURKAT improvement is more modest than THP1 (+8% vs +127%) because the bas
 - [x] ~~Improve JURKAT oracle~~ (ensemble ρ=0.54)
 - [x] ~~Run full optimization~~ (100 iterations, 5 epochs) ✅ **COMPLETE**
 - [x] ~~Update optimization script to use ensembles~~ ✅ **COMPLETE** (2026-02-04)
-- [ ] Re-run optimization with improved ensemble oracles
+- [x] ~~Re-run optimization with improved ensemble oracles~~ ✅ **COMPLETE** (2026-02-04)
 - [ ] Analyze top sequences for cell-type specificity
 - [ ] Experimental validation in cell lines
 
-### Full Optimization Results (2026-02-03)
+### Full Optimization Results (Ensemble Oracles) — 2026-02-04
 
-**Run configuration**: 100 iterations, 5 epochs, batch_size=256, lr=0.0001
+**Run configuration**: 100 iterations, 5 epochs, batch_size=256, lr=0.0001, **ensemble oracles**
 
-| Metric | Value |
-|--------|-------|
-| Total sequences | 25,600 |
-| Top reward | 0.4499 |
-| Top 10 avg JURKAT | 0.50 |
-| Top 10 avg THP1 | 0.39 |
-| Top 10 avg HEK293 | 0.21 |
+| Metric | Single Models | Ensembles | Change |
+|--------|---------------|-----------|--------|
+| Total sequences | 25,600 | 25,600 | — |
+| Top reward | 0.4499 | **0.4723** | +5.0% |
+| Top 10 avg JURKAT | 0.50 | **0.5529** | +10.6% |
+| Top 10 avg THP1 | 0.39 | **0.4052** | +3.9% |
+| Top 10 avg HEK293 | 0.21 | 0.2192 | ~same |
 
-**Output files**: `results/dual_on_hek293_20260203_215622/`
+**Output files (ensemble run)**: `results/dual_on_hek293_20260204_192544/`
 - `top_100_sequences.csv` — Best candidates for experimental validation
 - `all_sequences.csv` — Full dataset (25,600 sequences)
 - `summary.json` — Run configuration and metrics
 
 **Observations**:
-- Good tissue specificity achieved (~2.5x JURKAT/HEK293 ratio)
-- THP1 predictions are moderate; ensemble oracle may be conservative
+- Ensemble oracles improved all ON-target metrics
+- JURKAT saw largest improvement (+10.6%), likely due to better-calibrated ensemble
+- Tissue specificity maintained: JURKAT/HEK293 = 2.52x
 - Top sequences are GC-rich with typical promoter motifs (CpG islands, GGG repeats)
 
 ---
@@ -558,22 +559,20 @@ python scripts/evaluate_ensemble.py --cell JURKAT  # ρ=0.54
 python scripts/evaluate_ensemble.py --cell THP1    # ρ=0.89
 ```
 
-### Step 8: Optimization Script Updated to Use Ensembles ✅ COMPLETE (2026-02-04)
+### Step 8: Optimization with Ensemble Oracles ✅ COMPLETE (2026-02-04)
 
 Updated `scripts/run_dual_on_hek293_modal.py` to use ensemble oracles:
 - Added `EnsembleModel` wrapper class that loads 5 checkpoints and averages predictions
 - JURKAT and THP1 ensembles replace single models after base class initialization
-- Test run verified: ensembles load and score correctly
 
-**Quick test results** (1 iter, 256 sequences):
-| Metric | Value |
-|--------|-------|
-| Top reward | 0.30 |
-| Top 10 avg JURKAT | 0.45 |
-| Top 10 avg THP1 | 0.38 |
-| Top 10 avg HEK293 | 0.36 |
+**Full run results** (100 iter, 5 epochs):
+| Metric | Single Models | Ensembles | Change |
+|--------|---------------|-----------|--------|
+| Top reward | 0.4499 | **0.4723** | +5.0% |
+| Top 10 avg JURKAT | 0.50 | **0.5529** | +10.6% |
+| Top 10 avg THP1 | 0.39 | **0.4052** | +3.9% |
+| Top 10 avg HEK293 | 0.21 | 0.2192 | ~same |
 
-**Next**: Run full optimization with ensemble oracles:
-```bash
-modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
-```
+Results: `results/dual_on_hek293_20260204_192544/`
+
+**Next**: Analyze top sequences for motifs and cell-type specificity.
