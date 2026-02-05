@@ -1,23 +1,24 @@
 """
-Run Ctrl-DNA dual ON optimization on Modal GPU with HEK293 (PARM) as OFF target.
+Run Ctrl-DNA optimization on Modal GPU with HEK293 (PARM) as OFF target.
 
-This version uses:
-- JURKAT and THP1 as ON targets (EnformerModel ENSEMBLES - 5 models each)
-- HEK293 as OFF target (PARM pretrained model)
+Modes:
+- Dual ON (default): JURKAT + THP1 ON, HEK293 OFF
+- Single ON (--jurkat-only): JURKAT ON, HEK293 OFF (THP1 ignored)
 
 Ensemble oracles:
-- JURKAT: 5 models, ensemble ρ=0.54 (+8% vs single model)
-- THP1: 5 models, ensemble ρ=0.89 (+127% vs single model)
+- JURKAT: 5 models, ensemble ρ=0.54
+- THP1: 5 models, ensemble ρ=0.89
+- HEK293: PARM pretrained, 5 folds
 
 Usage:
-    # Run optimization with defaults
-    modal run scripts/run_dual_on_hek293_modal.py
-
-    # Quick test (1 iteration, 1 epoch)
-    modal run scripts/run_dual_on_hek293_modal.py --max-iter 1 --epochs 1
-
-    # Full run with custom params
+    # Dual ON (JURKAT + THP1)
     modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+
+    # Single ON (JURKAT only)
+    modal run scripts/run_dual_on_hek293_modal.py --jurkat-only --max-iter 100 --epochs 5
+
+    # Quick test
+    modal run scripts/run_dual_on_hek293_modal.py --max-iter 1 --epochs 1
 
 Cost estimate: ~$5-15 depending on iterations (A10G GPU)
 """
@@ -84,8 +85,13 @@ def run_optimization(
     off_constraint: float = 0.3,
     seed: int = 0,
     wandb_log: bool = False,
+    jurkat_only: bool = False,
 ) -> dict:
-    """Run dual ON optimization with HEK293 (PARM) as OFF target."""
+    """Run optimization with HEK293 (PARM) as OFF target.
+
+    Args:
+        jurkat_only: If True, only use JURKAT as ON target (ignore THP1 in reward).
+    """
     import os
     import sys
     import torch
@@ -132,11 +138,18 @@ def run_optimization(
             shutil.copy(src, dst)
 
     print(f"\n{'='*60}")
-    print("DUAL ON OPTIMIZATION with HEK293 (PARM) OFF target")
+    if jurkat_only:
+        print("JURKAT ON / HEK293 OFF OPTIMIZATION")
+    else:
+        print("DUAL ON (JURKAT + THP1) / HEK293 OFF OPTIMIZATION")
     print(f"{'='*60}")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"ON targets: JURKAT, THP1 (EnformerModel ENSEMBLES, 5 models each)")
-    print(f"OFF target: HEK293 (PARM pretrained, 5 folds)")
+    if jurkat_only:
+        print(f"ON target: JURKAT (5-model ensemble)")
+        print(f"OFF target: HEK293 (PARM, 5 folds)")
+    else:
+        print(f"ON targets: JURKAT, THP1 (5-model ensembles each)")
+        print(f"OFF target: HEK293 (PARM, 5 folds)")
     print(f"Max iterations: {max_iter}")
     print(f"Epochs per iteration: {epochs}")
     print(f"Batch size: {batch_size}")
@@ -297,18 +310,20 @@ def run_optimization(
 
     # Define DualOnOptimizer with HEK293
     class DualOnOptimizerHEK293(Lagrange_optimizer):
-        """Modified Lagrange optimizer for dual ON targets with HEK293 OFF.
+        """Lagrange optimizer for ON targets with HEK293 OFF.
 
-        Uses ensemble models for JURKAT and THP1 (5 models each, predictions averaged).
+        Supports dual ON (JURKAT + THP1) or single ON (JURKAT only) modes.
+        Uses ensemble models (5 models each, predictions averaged).
         """
 
-        def __init__(self, cfg):
+        def __init__(self, cfg, jurkat_only=False):
             cfg.task = "JURKAT"
             cfg.prefix_label = "100"
             cfg.constraint = [cfg.off_constraint, 0.0, 0.0]
             super().__init__(cfg)
             self.on_weight = cfg.on_weight
             self.off_constraint = cfg.off_constraint
+            self.jurkat_only = jurkat_only
             self.on_indices = [0, 2]  # JURKAT, THP1
             self.off_index = 1  # HEK293
 
@@ -317,7 +332,10 @@ def run_optimization(
             self.targets['JURKAT'] = jurkat_ensemble
             self.targets['THP1'] = thp1_ensemble
             print("  JURKAT: 5-model ensemble (ρ=0.54)")
-            print("  THP1: 5-model ensemble (ρ=0.89)")
+            if jurkat_only:
+                print("  THP1: loaded but IGNORED in reward (jurkat_only mode)")
+            else:
+                print("  THP1: 5-model ensemble (ρ=0.89)")
             print("Setting up HEK293 (PARM) as OFF target...")
 
         def normalize_hek293(self, score):
@@ -345,11 +363,19 @@ def run_optimization(
             # Order: JURKAT, HEK293, THP1
             scores = [scores_dict['JURKAT'], scores_dict['HEK293'], scores_dict['THP1']]
 
-            reward = (
-                self.on_weight * scores_dict['JURKAT']
-                + self.on_weight * scores_dict['THP1']
-                - (scores_dict['HEK293'] - self.off_constraint)
-            )
+            if self.jurkat_only:
+                # Single ON: only JURKAT contributes to reward
+                reward = (
+                    scores_dict['JURKAT']
+                    - max(0, scores_dict['HEK293'] - self.off_constraint)
+                )
+            else:
+                # Dual ON: both JURKAT and THP1 contribute
+                reward = (
+                    self.on_weight * scores_dict['JURKAT']
+                    + self.on_weight * scores_dict['THP1']
+                    - (scores_dict['HEK293'] - self.off_constraint)
+                )
 
             if dna in self.dna_buffer:
                 self.dna_buffer[dna][3] += 1
@@ -364,15 +390,18 @@ def run_optimization(
             jurkat_scores = scores_multi[:, 0]
             hek293_scores = scores_multi[:, 1]
             thp1_scores = scores_multi[:, 2]
-            scores = (
-                self.on_weight * jurkat_scores
-                + self.on_weight * thp1_scores
-                - (hek293_scores - self.off_constraint)
-            )
+            if self.jurkat_only:
+                scores = jurkat_scores - torch.clamp(hek293_scores - self.off_constraint, min=0)
+            else:
+                scores = (
+                    self.on_weight * jurkat_scores
+                    + self.on_weight * thp1_scores
+                    - (hek293_scores - self.off_constraint)
+                )
             return scores
 
     print("Initializing optimizer...")
-    optimizer = DualOnOptimizerHEK293(cfg)
+    optimizer = DualOnOptimizerHEK293(cfg, jurkat_only=jurkat_only)
 
     # Load starting sequences
     data_dir = cfg.data_dir
@@ -391,11 +420,17 @@ def run_optimization(
     hek293_scores = score_hek293_parm(starting_sequences['sequence'].tolist())
     starting_sequences['HEK293_mean'] = (hek293_scores - hek293_min) / (hek293_max - hek293_min)
 
-    starting_sequences['target'] = (
-        cfg.on_weight * starting_sequences['JURKAT_mean']
-        + cfg.on_weight * starting_sequences['THP1_mean']
-        - (starting_sequences['HEK293_mean'] - cfg.off_constraint)
-    )
+    if jurkat_only:
+        starting_sequences['target'] = (
+            starting_sequences['JURKAT_mean']
+            - np.maximum(0, starting_sequences['HEK293_mean'] - cfg.off_constraint)
+        )
+    else:
+        starting_sequences['target'] = (
+            cfg.on_weight * starting_sequences['JURKAT_mean']
+            + cfg.on_weight * starting_sequences['THP1_mean']
+            - (starting_sequences['HEK293_mean'] - cfg.off_constraint)
+        )
 
     starting_sequences['rewards'] = starting_sequences[
         ['JURKAT_mean', 'HEK293_mean', 'THP1_mean']
@@ -457,9 +492,10 @@ def run_optimization(
             "off_constraint": off_constraint,
             "seed": seed,
             "off_target": "HEK293_PARM",
+            "jurkat_only": jurkat_only,
             "on_targets": {
                 "JURKAT": {"type": "ensemble", "n_models": 5, "rho": 0.54},
-                "THP1": {"type": "ensemble", "n_models": 5, "rho": 0.89},
+                "THP1": {"type": "ensemble", "n_models": 5, "rho": 0.89, "used": not jurkat_only},
             },
         },
         "results": {
@@ -502,13 +538,22 @@ def main(
     off_constraint: float = 0.3,
     seed: int = 0,
     wandb_log: bool = False,
+    jurkat_only: bool = False,
 ):
-    """Run dual ON optimization with HEK293 (PARM) as OFF target."""
+    """Run optimization with HEK293 (PARM) as OFF target.
+
+    Use --jurkat-only for single ON target (JURKAT only, ignore THP1).
+    """
     print("Launching optimization on Modal...")
-    print("Using ENSEMBLE oracles:")
-    print("  - JURKAT: 5-model ensemble (ρ=0.54)")
-    print("  - THP1: 5-model ensemble (ρ=0.89)")
-    print("  - HEK293: PARM pretrained (5 folds)")
+    if jurkat_only:
+        print("Mode: JURKAT ON / HEK293 OFF (THP1 ignored)")
+        print("  - JURKAT: 5-model ensemble (ρ=0.54)")
+        print("  - HEK293: PARM pretrained (5 folds)")
+    else:
+        print("Mode: Dual ON (JURKAT + THP1) / HEK293 OFF")
+        print("  - JURKAT: 5-model ensemble (ρ=0.54)")
+        print("  - THP1: 5-model ensemble (ρ=0.89)")
+        print("  - HEK293: PARM pretrained (5 folds)")
 
     result = run_optimization.remote(
         max_iter=max_iter,
@@ -519,6 +564,7 @@ def main(
         off_constraint=off_constraint,
         seed=seed,
         wandb_log=wandb_log,
+        jurkat_only=jurkat_only,
     )
 
     print("\n" + "="*60)

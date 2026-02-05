@@ -98,10 +98,11 @@ Results: `results/dual_on_hek293_20260203_215622/`
 
 1. ~~**Update optimization script**: Use JURKAT and THP1 ensembles instead of single models~~ ✅ Done
 2. ~~**Re-run optimization**: With improved ensemble oracles~~ ✅ Done (2026-02-04)
-3. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
-4. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
-5. **Add B-cell oracle**: From SynBP data
-6. **Swap generator**: HyenaDNA → Evo 2
+3. ~~**Add single-ON mode**: `--jurkat-only` flag for JURKAT-only optimization~~ ✅ Done (2026-02-05)
+4. **Analyze top sequences**: Motif enrichment, GC content, sequence diversity
+5. **Experimental validation**: Test top 10-20 candidates in JURKAT, THP1, HEK293
+6. **Add B-cell oracle**: From SynBP data
+7. **Swap generator**: HyenaDNA → Evo 2 (may help break oracle ceiling)
 
 ---
 

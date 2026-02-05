@@ -80,6 +80,20 @@ Training scripts now evaluate on held-out test set and report:
 | **250 bp sequences** | Medium | May miss distal regulatory elements. Consider longer context in future. |
 | **No chromatin context** | Medium | Oracle predicts from sequence alone, ignoring cell-type chromatin state. |
 
+### Performance Ceiling (~0.45-0.47 top reward)
+
+Optimization plateaus around the same top reward regardless of iterations or target configuration. Likely causes:
+
+1. **Oracle quality ceiling**: JURKAT ρ=0.54 means oracle explains only ~29% of variance. Above a threshold, it can't distinguish "good" from "great" sequences.
+
+2. **Starting sequence quality**: Optimization starts from top 128 pre-selected high performers in `JURKAT_hard.csv`. Early rounds often just rediscover these.
+
+3. **Generator distribution limits**: HyenaDNA trained on natural sequences may struggle to generate out-of-distribution sequences.
+
+**More iterations help with diversity, not peak performance**: 100 iterations yields hundreds of diverse good candidates vs ~10 from quick test, but top score only improves marginally (0.45 → 0.47).
+
+**To break ceiling**: Better oracles, different generator (Evo 2), or experimental validation + active learning.
+
 ### TFBS Constraint Validation
 
 If `pymemesuite` is not installed, TFBS files are placeholders (all zeros).
@@ -294,8 +308,11 @@ For dual ON targets (JURKAT + THP1 ON, HEK293 OFF):
 #### Option A: Modal GPU (Recommended)
 
 ```bash
-# Full optimization with HEK293 OFF target (~$5-15, A10G GPU)
+# Dual ON: JURKAT + THP1 ON, HEK293 OFF (~$5-15, A10G GPU)
 modal run scripts/run_dual_on_hek293_modal.py --max-iter 100 --epochs 5
+
+# Single ON: JURKAT ON, HEK293 OFF (ignore THP1)
+modal run scripts/run_dual_on_hek293_modal.py --jurkat-only --max-iter 100 --epochs 5
 
 # Quick test (~$1)
 modal run scripts/run_dual_on_hek293_modal.py --max-iter 1 --epochs 1
@@ -413,6 +430,7 @@ From processed MPRA data (for normalization in base_optimizer.py):
    - PARM 5-fold ensemble for robust predictions
    - **JURKAT ensemble** (5 models, ρ=0.54) for ON target
    - **THP1 ensemble** (5 models, ρ=0.89) for ON target
+   - `--jurkat-only` flag: Single ON mode (ignore THP1 in reward)
    - Results saved to Modal volume `ctrl-dna-results`
    - ~$5-15 for full run (100 iter, 5 epochs)
 
