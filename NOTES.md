@@ -80,6 +80,74 @@ Training scripts now evaluate on held-out test set and report:
 | **250 bp sequences** | Medium | May miss distal regulatory elements. Consider longer context in future. |
 | **No chromatin context** | Medium | Oracle predicts from sequence alone, ignoring cell-type chromatin state. |
 
+### Critical: Oracle Validity Analysis (2026-02-05)
+
+**Summary**: The JURKAT oracle does not recognize real T-cell promoters and optimized sequences are far outside the training distribution. Experimental validation is essential before trusting any predictions.
+
+#### Training Data Bias
+
+The MPRA training data has significant composition bias:
+
+| Metric | Training Data | Optimized Sequences | Real T-cell Promoters |
+|--------|---------------|--------------------|-----------------------|
+| **GC content** | 62% | 65% | 44-49% (CD4, IL2) |
+| **G content** | 32% | **53%** | 23-29% |
+| **Sequences with G > 50%** | 1.1% | 100% | ~0% |
+
+The optimizer found sequences in a region of sequence space that represents only ~1% of training data.
+
+#### Oracle Fails to Recognize Real T-cell Promoters
+
+We scored known T-cell promoters with the JURKAT oracle:
+
+| Sequence Type | JURKAT Score | Expected |
+|---------------|-------------|----------|
+| **Optimized sequences** | 0.51 | High (optimized for this) |
+| **ACTB** (housekeeping) | 0.46 | Should be lower than T-cell |
+| **CD4** (constitutive T-cell marker) | 0.40 | Should be HIGH |
+| **IL2** (T-cell cytokine) | 0.34 | Should be high when induced |
+| **IFNG** (T-cell cytokine) | 0.37 | Should be high when induced |
+
+**Key finding**: The oracle scores the housekeeping gene ACTB higher than T-cell-specific CD4. It has not learned T-cell-specific regulatory logic.
+
+#### Motif Analysis: Optimized vs Real T-cell Promoters
+
+| Motif | Optimized (per seq) | Real T-cell (per seq) | Biological Role |
+|-------|--------------------|-----------------------|-----------------|
+| **SP1 (GC-box)** | 1.6 | 0.0 | Ubiquitous TF |
+| **ETS core** | 4.2 | 1.1 | Some immune-relevant |
+| **NF-κB** | 0.0 | 0.25 | Immune signaling (missing!) |
+| **NFAT** | 0.4 | 0.25 | T-cell activation |
+| **AP-1** | 0.01 | 0.12 | Immune signaling (missing!) |
+
+The optimized sequences are dominated by **ubiquitous SP1/GC-boxes**, while real T-cell promoters use **immune-specific TFs** (NF-κB, AP-1) that are largely absent from optimized sequences.
+
+#### Root Cause
+
+1. **Training data bias**: High-GC sequences overrepresented (62% avg GC vs 41% genome average)
+2. **Oracle learned spurious correlation**: G-rich → high score, not T-cell biology
+3. **Out-of-distribution optimization**: Generator exploited regions the oracle barely saw
+4. **Mismatched oracles**: JURKAT oracle (MPRA-trained) vs HEK293 oracle (PARM pretrained) - different data sources
+
+#### Alternative Approaches Considered
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Borzoi** (RNA-seq/CAGE trained) | Has real T-cell tracks (CD4+, CD8+, Jurkat), same model for all cell types | Trained on genomic context, not episomal. 524kb input vs 250bp promoter. |
+| **TFBU/DeepTFBU** | Uses known TFBS, optimizes context around them | Still needs validation |
+| **Chimeric promoters** | Use validated native elements | Less novel, but more reliable |
+| **Native promoters** | Known to work | No optimization, just truncation |
+
+**Key insight**: All computational oracles have limitations. MPRA-trained models match the episomal use case but may have biased training data. Genomic models (Borzoi) have better data but wrong context.
+
+#### Recommendations
+
+1. **Do not trust oracle scores without experimental validation**
+2. **Include positive controls**: Test known T-cell promoters (CD4, CD2) alongside optimized sequences
+3. **Include negative controls**: Random sequences, ubiquitous promoters
+4. **Consider hybrid approach**: Start with known T-cell TFBS (NF-κB, NFAT, RUNX), optimize context
+5. **Constrain optimization**: Penalize extreme G-richness (>45% G) to stay in-distribution
+
 ### Performance Ceiling — RESOLVED
 
 **Previous observation**: Dual ON optimization plateaued at ~0.45-0.47 top reward.
@@ -116,14 +184,25 @@ Ctrl-DNA normalizes oracle scores using min/max fitness ranges. Hardcoded defaul
 
 ### Recommendations Before Wet Lab
 
-1. **Retrain oracles** with fixed Modal script
-2. **Check test metrics** - Spearman ρ ≥ 0.5 for all cell types
-3. **Run optimization** and analyze top sequences
-4. **Include controls** in validation:
-   - Known T-cell promoters (e.g., CD4, IL2)
-   - Known ubiquitous promoters (e.g., EF1α, CMV)
+1. ~~**Retrain oracles** with fixed Modal script~~ ✅ Done
+2. ~~**Check test metrics** - Spearman ρ ≥ 0.5 for all cell types~~ ✅ Done (but see oracle validity concerns below)
+3. ~~**Run optimization** and analyze top sequences~~ ✅ Done
+4. **CRITICAL: Include controls in validation**:
+   - Known T-cell promoters (e.g., CD4, CD2, CD8A) — **oracle scores these LOWER than optimized sequences**
+   - Known ubiquitous promoters (e.g., EF1α, CMV, ACTB)
    - Random sequences (negative control)
-5. **Test in HEK293** - K562 OFF does not guarantee HEK293 OFF
+   - Expect optimized sequences may NOT outperform native T-cell promoters in real cells
+5. **Test in HEK293** - Verify OFF-target suppression
+6. **Interpret results carefully** - Oracle predictions may not reflect real T-cell biology
+
+### Alternative Approaches to Consider
+
+Given oracle validity concerns, consider:
+
+1. **Hybrid approach**: Use known T-cell TFBS (NF-κB, NFAT, RUNX, ETS1) as constraints, optimize only spacing/context
+2. **Native promoter truncation**: Start with CD4 or CD2 promoter, truncate to minimal functional element
+3. **Borzoi as alternative oracle**: Has real T-cell CAGE tracks (indices 168-171 for CD4+/CD8+ T-cells, 312-313 for Jurkat), but requires 524kb context
+4. **TFBU/DeepTFBU**: Modular approach that optimizes context around known TFBS ([GitHub](https://github.com/WangLabTHU/DeepTFBU))
 
 ---
 
@@ -225,7 +304,12 @@ Note: JURKAT improvement is more modest than THP1 (+8% vs +127%) because the bas
 - [x] ~~Run full optimization~~ (100 iterations, 5 epochs) ✅ **COMPLETE**
 - [x] ~~Update optimization script to use ensembles~~ ✅ **COMPLETE** (2026-02-04)
 - [x] ~~Re-run optimization with improved ensemble oracles~~ ✅ **COMPLETE** (2026-02-04)
-- [ ] Analyze top sequences for cell-type specificity
+- [x] ~~Analyze top sequences for cell-type specificity~~ ✅ **COMPLETE** (2026-02-05) — **Found significant issues**
+- [ ] **Decide on path forward** given oracle validity concerns:
+  - Option A: Proceed to wet lab with extensive controls (expect optimized seqs may underperform native promoters)
+  - Option B: Try hybrid approach (known TFBS + context optimization)
+  - Option C: Try Borzoi as alternative oracle
+  - Option D: Use native T-cell promoters directly (no ML optimization)
 - [ ] Experimental validation in cell lines
 
 ### Full Optimization Results — Comparison
@@ -438,6 +522,17 @@ From processed MPRA data (for normalization in base_optimizer.py):
    - Downloads JASPAR 2024 motifs
    - Generates RL init and TFBS frequency files
 
+7. **scripts/analyze_top_sequences.py** - Analyze optimized sequences
+   - Nucleotide composition (GC%, G%)
+   - Motif enrichment (SP1, ETS, NF-κB, NFAT, etc.)
+   - Sequence diversity (pairwise Hamming distances)
+   - Score correlations
+
+8. **scripts/score_known_promoters.py** - Score known promoters with oracles
+   - Scores CD4, IL2, IFNG, and other known promoters
+   - Compares to optimized sequences
+   - Validates oracle biological relevance
+
 ### Ctrl-DNA Fork Changes
 
 1. **reinforce_multi_lagrange.py**
@@ -487,6 +582,9 @@ pip install wandb
 | promoter_models | https://github.com/anikethjr/promoter_models | MPRA data source |
 | JASPAR 2024 | https://jaspar.elixir.no | TF motif database |
 | regLM | https://github.com/Genentech/regLM | Oracle architecture |
+| PARM | https://github.com/vansteensellab/PARM | HEK293 oracle (pretrained) |
+| Borzoi | https://github.com/calico/borzoi | Alternative oracle (has T-cell CAGE tracks) |
+| DeepTFBU | https://github.com/WangLabTHU/DeepTFBU | Modular enhancer design |
 
 ---
 

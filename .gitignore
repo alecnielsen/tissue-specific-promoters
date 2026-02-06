@@ -52,3 +52,6 @@ Thumbs.db
 # Secrets
 .env
 *.key
+
+# Generated data
+data/human_promoters/
